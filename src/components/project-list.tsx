@@ -92,7 +92,7 @@ export function ProjectList({
   return (
     <motion.div className="flex flex-col" layout>
       {/* Header row - matches grid-cols from ProjectRow */}
-      <div className="grid grid-cols-[24px_1fr_80px_64px_260px] items-center gap-4 px-4 py-2 border-b border-zinc-700 bg-zinc-900/50 text-xs text-zinc-500 uppercase tracking-wider sticky top-0">
+      <div className="grid grid-cols-[24px_1fr_80px_64px_28px_28px_28px_28px_56px_72px] items-center gap-3 px-4 py-2 border-b border-zinc-700 bg-zinc-900/50 text-xs text-zinc-500 uppercase tracking-wider sticky top-0">
         <SortHeader field="status" current={sortField} direction={sortDirection} onSort={handleSort} center>
           Status
         </SortHeader>
@@ -105,7 +105,12 @@ export function ProjectList({
         <SortHeader field="port" current={sortField} direction={sortDirection} onSort={handleSort} center>
           Port
         </SortHeader>
-        <div className="text-center">Actions</div>
+        <div className="text-center text-[10px]" title="Open in browser">Open</div>
+        <div className="text-center text-[10px]" title="View logs">Logs</div>
+        <div className="text-center text-[10px]" title="Clear cache">Cache</div>
+        <div className="text-center text-[10px]" title="Delete lock">Lock</div>
+        <div className="text-center text-[10px]">Power</div>
+        <div className="text-center text-[10px]">Details</div>
       </div>
 
       {/* Project rows */}

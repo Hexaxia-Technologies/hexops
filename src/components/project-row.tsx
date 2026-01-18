@@ -88,7 +88,7 @@ export function ProjectRow({
       transition={{ duration: 0.15 }}
       onClick={() => onSelect(project.id)}
       className={cn(
-        'grid grid-cols-[24px_1fr_80px_64px_260px] items-center gap-4 px-4 py-3 border-b border-zinc-800/50 cursor-pointer transition-colors',
+        'grid grid-cols-[24px_1fr_80px_64px_28px_28px_28px_28px_56px_72px] items-center gap-3 px-4 py-3 border-b border-zinc-800/50 cursor-pointer transition-colors',
         isSelected
           ? 'bg-zinc-800/80 border-l-2 border-l-purple-500'
           : 'hover:bg-zinc-900/50'
@@ -138,9 +138,8 @@ export function ProjectRow({
         </Badge>
       </div>
 
-      {/* Actions - fixed width container */}
-      <div className="flex items-center justify-end gap-1">
-        {/* Open in browser - always render, but invisible when not running */}
+      {/* Open in browser */}
+      <div className="flex justify-center">
         <a
           href={`http://localhost:${project.port}`}
           target="_blank"
@@ -159,8 +158,10 @@ export function ProjectRow({
         >
           <ExternalLink className="h-3.5 w-3.5" />
         </a>
+      </div>
 
-        {/* View logs - always render, but invisible when not running */}
+      {/* View logs */}
+      <div className="flex justify-center">
         <Button
           variant="ghost"
           size="sm"
@@ -176,7 +177,10 @@ export function ProjectRow({
         >
           <FileText className="h-3.5 w-3.5" />
         </Button>
+      </div>
 
+      {/* Clear cache */}
+      <div className="flex justify-center">
         <Button
           variant="ghost"
           size="sm"
@@ -187,7 +191,10 @@ export function ProjectRow({
         >
           <RefreshCw className={cn('h-3.5 w-3.5', actionLoading === 'cache' && 'animate-spin')} />
         </Button>
+      </div>
 
+      {/* Delete lock */}
+      <div className="flex justify-center">
         <Button
           variant="ghost"
           size="sm"
@@ -198,12 +205,15 @@ export function ProjectRow({
         >
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
+      </div>
 
+      {/* Power (Start/Stop) */}
+      <div className="flex justify-center">
         <Button
           variant={isRunning ? 'destructive' : 'default'}
           size="sm"
           className={cn(
-            'h-7 w-14 text-xs ml-1',
+            'h-7 w-14 text-xs',
             !isRunning && 'bg-purple-600 hover:bg-purple-700 text-white'
           )}
           onClick={handleToggle}
@@ -211,11 +221,14 @@ export function ProjectRow({
         >
           {isLoading ? '...' : isRunning ? 'Stop' : 'Start'}
         </Button>
+      </div>
 
+      {/* Details */}
+      <div className="flex justify-center">
         <Button
           variant="ghost"
           size="sm"
-          className="h-7 px-2 text-xs text-zinc-400 hover:text-zinc-100 ml-1"
+          className="h-7 px-2 text-xs text-zinc-400 hover:text-zinc-100"
           onClick={handleViewDetails}
           title="View details"
         >
