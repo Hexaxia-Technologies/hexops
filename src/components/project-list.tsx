@@ -149,7 +149,7 @@ function SortHeader({ field, current, direction, onSort, center, children }: Sor
     <button
       onClick={() => onSort(field)}
       className={cn(
-        'flex items-center gap-1 hover:text-zinc-300 transition-colors',
+        'flex items-center gap-1 hover:text-zinc-300 transition-colors text-[10px]',
         center && 'justify-center',
         isActive && 'text-zinc-300'
       )}
