@@ -19,9 +19,8 @@ export async function GET() {
       isRunning: portStatus.get(config.port) ?? false,
     }));
 
-    // Fetch extended status for all projects in parallel
-    // Skip package checks (slow) - they're cached and can be fetched separately
-    const extendedStatus = await getExtendedStatusBatch(projectsWithStatus, false);
+    // Fetch extended status for all projects in parallel (includes package checks)
+    const extendedStatus = await getExtendedStatusBatch(projectsWithStatus, true);
 
     // Combine config with status and extended info
     const projects: Project[] = projectConfigs.map((config) => ({

@@ -3,6 +3,7 @@
     {
       "id": "hexops",
       "name": "HexOps",
+      "description": "Dev project management dashboard",
       "path": "/home/aaron/Projects/hexops",
       "port": 3000,
       "category": "Internal",
@@ -14,6 +15,7 @@
     {
       "id": "sailbot",
       "name": "SailBot",
+      "description": "AI sailing assistant platform",
       "path": "/home/aaron/Projects/sailbot",
       "port": 3010,
       "category": "Product",
@@ -25,6 +27,7 @@
     {
       "id": "hexcms-studio",
       "name": "HexCMS Studio",
+      "description": "Content management studio UI",
       "path": "/home/aaron/Projects/hexcms-studio",
       "port": 3020,
       "category": "Internal",
@@ -36,6 +39,7 @@
     {
       "id": "ke-agent",
       "name": "KE-Agent",
+      "description": "Knowledge engineering agent",
       "path": "/home/aaron/Projects/ke-agent",
       "port": 3030,
       "category": "Client",
@@ -47,6 +51,7 @@
     {
       "id": "ddts",
       "name": "DDTS",
+      "description": "Client project",
       "path": "/home/aaron/Projects/ddts",
       "port": 3040,
       "category": "Client",
@@ -58,6 +63,7 @@
     {
       "id": "lyfe-uncharted",
       "name": "Lyfe Uncharted",
+      "description": "Personal project",
       "path": "/home/aaron/Projects/lyfe-uncharted",
       "port": 3050,
       "category": "Personal",
@@ -69,6 +75,7 @@
     {
       "id": "hamradiotoday",
       "name": "Ham Radio Today",
+      "description": "Ham radio community site",
       "path": "/home/aaron/Projects/hamradiotoday",
       "port": 3060,
       "category": "Personal",
@@ -80,6 +87,7 @@
     {
       "id": "hexaxia-ai",
       "name": "hexaxia.ai",
+      "description": "Hexaxia AI marketing site",
       "path": "/home/aaron/Projects/hexaxia.ai-dev",
       "port": 3070,
       "category": "Internal",
@@ -91,6 +99,7 @@
     {
       "id": "hexaxia-tech",
       "name": "hexaxia.tech",
+      "description": "Hexaxia tech website",
       "path": "/home/aaron/Projects/hexaxia.tech",
       "port": 3080,
       "category": "Internal",
@@ -102,6 +111,7 @@
     {
       "id": "hextant",
       "name": "Hextant",
+      "description": "Multi-agent orchestration platform",
       "path": "/home/aaron/Projects/hextant-projects/hextant",
       "port": 3090,
       "category": "Product",
@@ -113,6 +123,7 @@
     {
       "id": "agent-forge",
       "name": "AgentForge",
+      "description": "AI agent development platform",
       "path": "/home/aaron/Projects/agent-forge",
       "port": 3100,
       "category": "Product",
@@ -124,6 +135,7 @@
     {
       "id": "hexcms",
       "name": "HexCMS",
+      "description": "Headless content management system",
       "path": "/home/aaron/Projects/hexcms",
       "port": 3110,
       "category": "Internal",
@@ -135,6 +147,7 @@
     {
       "id": "sailbot-ai",
       "name": "sailbot.ai",
+      "description": "SailBot marketing website",
       "path": "/home/aaron/Projects/sailbot.ai",
       "port": 3120,
       "category": "Product",
@@ -146,6 +159,7 @@
     {
       "id": "sailbot-admin",
       "name": "SailBot Admin",
+      "description": "SailBot admin dashboard",
       "path": "/home/aaron/Projects/sailbot-admin",
       "port": 3002,
       "category": "Product",

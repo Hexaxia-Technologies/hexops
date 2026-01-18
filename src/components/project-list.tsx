@@ -92,7 +92,7 @@ export function ProjectList({
   return (
     <motion.div className="flex flex-col" layout>
       {/* Header row - matches grid-cols from ProjectRow */}
-      <div className="grid grid-cols-[24px_140px_1fr_90px_40px_70px_55px_55px_45px_28px_28px_28px_28px_56px_72px] items-center gap-2 px-4 py-2 border-b border-zinc-700 bg-zinc-900/50 text-[10px] text-zinc-500 uppercase tracking-wider sticky top-0">
+      <div className="grid grid-cols-[48px_140px_1fr_90px_40px_70px_55px_55px_45px_36px_36px_36px_36px_56px_72px] items-center gap-2 px-4 py-2 border-b border-zinc-700 bg-zinc-900/50 text-[10px] text-zinc-500 uppercase tracking-wider sticky top-0">
         <SortHeader field="status" current={sortField} direction={sortDirection} onSort={handleSort} center>
           STATUS
         </SortHeader>
@@ -100,22 +100,22 @@ export function ProjectList({
           NAME
         </SortHeader>
         <div>DESC</div>
-        <div className="text-center" title="Git branch">GIT</div>
-        <div className="text-center" title="Outdated packages">PKGS</div>
+        <div className="flex justify-center" title="Git branch">GIT</div>
+        <div className="flex justify-center" title="Outdated packages">PKGS</div>
         <SortHeader field="category" current={sortField} direction={sortDirection} onSort={handleSort} center>
           CATEGORY
         </SortHeader>
         <SortHeader field="port" current={sortField} direction={sortDirection} onSort={handleSort} center>
           PORT
         </SortHeader>
-        <div className="text-center" title="Process uptime">UPTIME</div>
-        <div className="text-center" title="Memory usage">MEM</div>
-        <div className="text-center" title="Open in browser">OPEN</div>
-        <div className="text-center" title="View logs">LOGS</div>
-        <div className="text-center" title="Clear cache">CACHE</div>
-        <div className="text-center" title="Delete lock">LOCK</div>
-        <div className="text-center">POWER</div>
-        <div className="text-center">DETAILS</div>
+        <div className="flex justify-center" title="Process uptime">UPTIME</div>
+        <div className="flex justify-center" title="Memory usage">MEM</div>
+        <div className="flex justify-center" title="Open in browser">OPEN</div>
+        <div className="flex justify-center" title="View logs">LOGS</div>
+        <div className="flex justify-center" title="Clear cache">CACHE</div>
+        <div className="flex justify-center" title="Delete lock">LOCK</div>
+        <div className="flex justify-center">POWER</div>
+        <div className="flex justify-center">DETAILS</div>
       </div>
 
       {/* Project rows */}
@@ -154,7 +154,7 @@ function SortHeader({ field, current, direction, onSort, center, children }: Sor
     <button
       onClick={() => onSort(field)}
       className={cn(
-        'flex items-center gap-1 hover:text-zinc-300 transition-colors text-[10px]',
+        'flex items-center gap-1 hover:text-zinc-300 transition-colors text-[10px] font-normal leading-none',
         center && 'justify-center',
         isActive && 'text-zinc-300'
       )}

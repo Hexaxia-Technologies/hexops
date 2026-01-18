@@ -39,8 +39,6 @@ export default function Home() {
 
   useEffect(() => {
     fetchProjects();
-    const interval = setInterval(fetchProjects, 5000);
-    return () => clearInterval(interval);
   }, [fetchProjects]);
 
   const handleStart = async (id: string) => {
