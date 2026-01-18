@@ -7,6 +7,7 @@ import type { ProjectPatchCache } from '@/lib/types';
 export async function POST(_request: NextRequest) {
   try {
     const projects = getProjects();
+    const failedProjects: string[] = [];
 
     // Force refresh all projects
     const caches = await Promise.all(
@@ -15,6 +16,7 @@ export async function POST(_request: NextRequest) {
           return await scanProject(project, true);
         } catch (err) {
           console.error(`Failed to scan project ${project.id}:`, err);
+          failedProjects.push(project.id);
           return null;
         }
       })
@@ -32,12 +34,13 @@ export async function POST(_request: NextRequest) {
     const { queue, summary } = buildPriorityQueue(validCaches);
 
     return NextResponse.json({
-      success: true,
+      success: failedProjects.length === 0,
       queue,
       summary,
       lastScan: state.lastFullScan,
       projectCount: projects.length,
       scannedCount: validCaches.length,
+      failedProjects,
     });
   } catch (error) {
     console.error('Error scanning patches:', error);
