@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { X, ChevronLeft } from 'lucide-react';
 import type { LogEntry } from '@/lib/types';
@@ -24,28 +23,35 @@ export function RightSidebar({
   projectId,
   projectName,
 }: RightSidebarProps) {
-  // Don't render anything if no panel
-  if (!panel) return null;
-
   return (
-    <motion.aside
-      key="right-sidebar"
-      initial={{ x: 400, opacity: 0 }}
-      animate={{ x: 0, opacity: 1 }}
-      exit={{ x: 400, opacity: 0 }}
-      transition={{ duration: 0.2, ease: 'easeOut' }}
-      className="w-[400px] flex-shrink-0 border-l border-zinc-800 bg-zinc-950 flex flex-col overflow-hidden"
-    >
-      {panel === 'logs' && projectId && (
+    <aside className="w-[400px] flex-shrink-0 border-l border-zinc-800 bg-zinc-950 flex flex-col overflow-hidden">
+      {panel === 'logs' && projectId ? (
         <LogPanel
           projectId={projectId}
           projectName={projectName || projectId}
           onClose={onClose}
         />
+      ) : (
+        <EmptyState />
       )}
       {/* Future panels can be added here */}
       {/* {panel === 'details' && <DetailsPanel ... />} */}
-    </motion.aside>
+    </aside>
+  );
+}
+
+// Empty state when no panel is active
+function EmptyState() {
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
+      <div className="w-12 h-12 rounded-full bg-zinc-800/50 flex items-center justify-center mb-4">
+        <span className="text-2xl text-zinc-600">📋</span>
+      </div>
+      <h3 className="text-sm font-medium text-zinc-400 mb-1">No panel open</h3>
+      <p className="text-xs text-zinc-600 max-w-[200px]">
+        Click "View Logs" on a running project to see live output here
+      </p>
+    </div>
   );
 }
 

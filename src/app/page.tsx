@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { AnimatePresence } from 'framer-motion';
 import { Sidebar } from '@/components/sidebar';
 import { ProjectList } from '@/components/project-list';
 import { RightSidebar } from '@/components/right-sidebar';
@@ -220,14 +219,12 @@ export default function Home() {
       </main>
 
       {/* Right Sidebar - Panels */}
-      <AnimatePresence>
-        <RightSidebar
-          panel={rightPanel?.type || null}
-          onClose={handleCloseRightPanel}
-          projectId={rightPanel?.projectId}
-          projectName={rightPanelProject?.name}
-        />
-      </AnimatePresence>
+      <RightSidebar
+        panel={rightPanel?.type || null}
+        onClose={handleCloseRightPanel}
+        projectId={rightPanel?.projectId}
+        projectName={rightPanelProject?.name}
+      />
     </div>
   );
 }
