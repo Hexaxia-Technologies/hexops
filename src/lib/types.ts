@@ -4,6 +4,7 @@ export interface ProjectConfig {
   path: string;
   port: number;
   category: string;
+  description?: string;
   scripts: {
     dev: string;
     build: string;

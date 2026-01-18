@@ -75,6 +75,14 @@ interface GitInfo {
   untrackedCount: number;
 }
 
+interface ProjectInfo {
+  name: string;
+  version: string;
+  description?: string;
+  nodeVersion?: string;
+  packageManager: string;
+}
+
 export function ProjectDetail({
   project,
   onBack,
@@ -90,6 +98,7 @@ export function ProjectDetail({
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [gitInfo, setGitInfo] = useState<GitInfo | null>(null);
   const [gitLoading, setGitLoading] = useState<string | null>(null);
+  const [projectInfo, setProjectInfo] = useState<ProjectInfo | null>(null);
 
   const isRunning = project.status === 'running';
 
@@ -119,15 +128,29 @@ export function ProjectDetail({
     }
   }, [project.id]);
 
-  // Poll metrics every 5 seconds when running, fetch git info on mount
+  // Fetch project info
+  const fetchProjectInfo = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/projects/${project.id}/info`);
+      if (res.ok) {
+        const data = await res.json();
+        setProjectInfo(data);
+      }
+    } catch {
+      // Silently fail - project info is optional
+    }
+  }, [project.id]);
+
+  // Poll metrics every 5 seconds when running, fetch git/project info on mount
   useEffect(() => {
     fetchMetrics();
     fetchGitInfo();
+    fetchProjectInfo();
     if (isRunning) {
       const interval = setInterval(fetchMetrics, 5000);
       return () => clearInterval(interval);
     }
-  }, [isRunning, fetchMetrics, fetchGitInfo]);
+  }, [isRunning, fetchMetrics, fetchGitInfo, fetchProjectInfo]);
 
   const handleStart = async () => {
     setIsToggling(true);
@@ -285,6 +308,45 @@ export function ProjectDetail({
       <div className="flex-1 overflow-auto p-6 space-y-4">
         {/* Control Panel */}
         <div className="border border-zinc-800 rounded-lg bg-zinc-900/50 p-4 space-y-4">
+          {/* Project Info Row */}
+          <div className="pb-4 border-b border-zinc-800">
+            {/* Description */}
+            {(project.description || projectInfo?.description) && (
+              <p className="text-sm text-zinc-400 mb-3">
+                {project.description || projectInfo?.description}
+              </p>
+            )}
+
+            {/* Info badges */}
+            <div className="flex flex-wrap items-center gap-3">
+              {projectInfo?.version && (
+                <Badge variant="secondary" className="text-xs bg-zinc-800 text-zinc-300">
+                  v{projectInfo.version}
+                </Badge>
+              )}
+
+              <Badge variant="secondary" className="text-xs bg-zinc-800 text-zinc-400">
+                {project.category}
+              </Badge>
+
+              {projectInfo?.packageManager && (
+                <Badge variant="secondary" className="text-xs bg-zinc-800 text-zinc-400">
+                  {projectInfo.packageManager}
+                </Badge>
+              )}
+
+              {projectInfo?.nodeVersion && (
+                <Badge variant="secondary" className="text-xs bg-zinc-800 text-zinc-400">
+                  Node {projectInfo.nodeVersion}
+                </Badge>
+              )}
+
+              <span className="text-xs text-zinc-500 font-mono">
+                {project.scripts.dev}
+              </span>
+            </div>
+          </div>
+
           {/* Git Status Row */}
           {gitInfo && (
             <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
