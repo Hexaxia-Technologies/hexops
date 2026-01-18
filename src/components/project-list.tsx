@@ -105,7 +105,7 @@ export function ProjectList({
         <SortHeader field="port" current={sortField} direction={sortDirection} onSort={handleSort} center>
           Port
         </SortHeader>
-        <div className="text-right">Actions</div>
+        <div className="text-center">Actions</div>
       </div>
 
       {/* Project rows */}
