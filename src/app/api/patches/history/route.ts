@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readPatchHistory } from '@/lib/patch-storage';
 
+const MAX_LIMIT = 500;
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const projectId = searchParams.get('projectId');
-    const limit = parseInt(searchParams.get('limit') || '50', 10);
+    const rawLimit = parseInt(searchParams.get('limit') || '50', 10);
+    
+    // Validate and clamp limit
+    const limit = Math.min(Math.max(isNaN(rawLimit) ? 50 : rawLimit, 1), MAX_LIMIT);
 
     const history = readPatchHistory();
     let updates = history.updates;
@@ -15,12 +20,15 @@ export async function GET(request: NextRequest) {
       updates = updates.filter(u => u.projectId === projectId);
     }
 
+    // Get total before slicing
+    const total = updates.length;
+
     // Apply limit
     updates = updates.slice(0, limit);
 
     return NextResponse.json({
       updates,
-      total: history.updates.length,
+      total,
     });
   } catch (error) {
     console.error('Error fetching patch history:', error);
