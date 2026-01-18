@@ -2,40 +2,125 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { X, ChevronLeft } from 'lucide-react';
+import { X, Terminal, Package } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import type { LogEntry } from '@/lib/types';
 
-type PanelType = 'logs' | 'details' | null;
+// Panel types
+export type PanelType = 'logs' | 'package-health';
+
+export interface LogsPanel {
+  type: 'logs';
+  projectId: string;
+  projectName: string;
+}
+
+export interface PackageHealthPanel {
+  type: 'package-health';
+  projectId: string;
+  projectName: string;
+  subType: 'outdated' | 'audit';
+  rawOutput: string;
+  title: string;
+}
+
+export type Panel = LogsPanel | PackageHealthPanel;
 
 interface RightSidebarProps {
-  // Current panel type
-  panel: PanelType;
-  onClose: () => void;
-
-  // Log viewer props (when panel === 'logs')
-  projectId?: string;
-  projectName?: string;
+  panels: Panel[];
+  activePanel: PanelType | null;
+  onActivate: (type: PanelType) => void;
+  onClose: (type: PanelType) => void;
+  onCloseAll: () => void;
 }
 
 export function RightSidebar({
-  panel,
+  panels,
+  activePanel,
+  onActivate,
   onClose,
-  projectId,
-  projectName,
+  onCloseAll,
 }: RightSidebarProps) {
+  // Find active panel data
+  const activePanelData = panels.find(p => p.type === activePanel);
+
+  if (panels.length === 0) {
+    return (
+      <aside className="w-[400px] flex-shrink-0 border-l border-zinc-800 bg-zinc-950 flex flex-col overflow-hidden">
+        <EmptyState />
+      </aside>
+    );
+  }
+
   return (
     <aside className="w-[400px] flex-shrink-0 border-l border-zinc-800 bg-zinc-950 flex flex-col overflow-hidden">
-      {panel === 'logs' && projectId ? (
-        <LogPanel
-          projectId={projectId}
-          projectName={projectName || projectId}
-          onClose={onClose}
+      {/* Tab Bar */}
+      <div className="flex items-center border-b border-zinc-800 bg-zinc-900/50">
+        <div className="flex-1 flex">
+          {panels.map((panel) => (
+            <div
+              key={panel.type}
+              role="tab"
+              tabIndex={0}
+              onClick={() => onActivate(panel.type)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onActivate(panel.type);
+                }
+              }}
+              className={cn(
+                'flex items-center gap-2 px-4 py-2.5 text-xs font-medium border-r border-zinc-800 transition-colors cursor-pointer',
+                activePanel === panel.type
+                  ? 'bg-zinc-950 text-zinc-100'
+                  : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900'
+              )}
+            >
+              {panel.type === 'logs' ? (
+                <Terminal className="h-3.5 w-3.5" />
+              ) : (
+                <Package className="h-3.5 w-3.5" />
+              )}
+              <span>
+                {panel.type === 'logs' ? 'Logs' :
+                 (panel as PackageHealthPanel).subType === 'outdated' ? 'Updates' : 'Audit'}
+              </span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClose(panel.type);
+                }}
+                className="ml-1 p-0.5 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+        {panels.length > 1 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-full px-3 text-xs text-zinc-500 hover:text-zinc-300 rounded-none"
+            onClick={onCloseAll}
+          >
+            Close All
+          </Button>
+        )}
+      </div>
+
+      {/* Panel Content */}
+      {activePanelData?.type === 'logs' && (
+        <LogPanelContent
+          projectId={activePanelData.projectId}
+          projectName={activePanelData.projectName}
         />
-      ) : (
-        <EmptyState />
       )}
-      {/* Future panels can be added here */}
-      {/* {panel === 'details' && <DetailsPanel ... />} */}
+      {activePanelData?.type === 'package-health' && (
+        <PackageHealthPanelContent
+          panel={activePanelData as PackageHealthPanel}
+        />
+      )}
     </aside>
   );
 }
@@ -49,20 +134,19 @@ function EmptyState() {
       </div>
       <h3 className="text-sm font-medium text-zinc-400 mb-1">No panel open</h3>
       <p className="text-xs text-zinc-600 max-w-[200px]">
-        Click "View Logs" on a running project to see live output here
+        Click "View Logs" on a running project or run package health checks to see output here
       </p>
     </div>
   );
 }
 
-// Log Panel Component
-interface LogPanelProps {
+// Log Panel Content
+interface LogPanelContentProps {
   projectId: string;
   projectName: string;
-  onClose: () => void;
 }
 
-function LogPanel({ projectId, projectName, onClose }: LogPanelProps) {
+function LogPanelContent({ projectId, projectName }: LogPanelContentProps) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -93,39 +177,18 @@ function LogPanel({ projectId, projectName, onClose }: LogPanelProps) {
   return (
     <>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800 flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0 text-zinc-400 hover:text-zinc-100"
-            onClick={onClose}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <div>
-            <h2 className="font-medium text-zinc-100 text-sm">{projectName}</h2>
-            <p className="text-xs text-zinc-500">Live Logs</p>
-          </div>
+      <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800/50 flex-shrink-0 bg-zinc-900/30">
+        <div className="text-xs text-zinc-500">
+          <span className="text-zinc-300">{projectName}</span> — Live Logs
         </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            className={`text-xs h-7 ${autoScroll ? 'text-purple-400' : 'text-zinc-500'}`}
-            onClick={() => setAutoScroll(!autoScroll)}
-          >
-            {autoScroll ? 'Auto-scroll' : 'Manual'}
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0 text-zinc-400 hover:text-zinc-100"
-            onClick={onClose}
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={cn('text-xs h-6 px-2', autoScroll ? 'text-purple-400' : 'text-zinc-500')}
+          onClick={() => setAutoScroll(!autoScroll)}
+        >
+          {autoScroll ? 'Auto-scroll' : 'Manual'}
+        </Button>
       </div>
 
       {/* Log content */}
@@ -147,6 +210,36 @@ function LogPanel({ projectId, projectName, onClose }: LogPanelProps) {
             ))
           )}
         </div>
+      </div>
+    </>
+  );
+}
+
+// Package Health Panel Content
+interface PackageHealthPanelContentProps {
+  panel: PackageHealthPanel;
+}
+
+function PackageHealthPanelContent({ panel }: PackageHealthPanelContentProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  return (
+    <>
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800/50 flex-shrink-0 bg-zinc-900/30">
+        <div className="text-xs text-zinc-500">
+          <span className="text-zinc-300">{panel.projectName}</span> — {panel.title}
+        </div>
+        <span className="text-xs text-zinc-600">
+          {panel.subType === 'outdated' ? 'pnpm outdated' : 'pnpm audit'}
+        </span>
+      </div>
+
+      {/* Output content */}
+      <div className="flex-1 overflow-auto p-4" ref={scrollRef}>
+        <pre className="font-mono text-xs text-zinc-300 whitespace-pre-wrap">
+          {panel.rawOutput || 'No output available'}
+        </pre>
       </div>
     </>
   );

@@ -157,7 +157,14 @@ export function ProjectRow({
       {/* Package status */}
       <div className="flex justify-center">
         {ext?.packages !== undefined ? (
-          ext.packages.outdatedCount > 0 ? (
+          ext.packages.criticalVulnerabilityCount && ext.packages.criticalVulnerabilityCount > 0 ? (
+            <span
+              className="text-xs text-red-500 font-medium"
+              title={`${ext.packages.criticalVulnerabilityCount} critical/high vulnerabilities, ${ext.packages.outdatedCount} outdated`}
+            >
+              {ext.packages.outdatedCount > 0 ? ext.packages.outdatedCount : '!'}
+            </span>
+          ) : ext.packages.outdatedCount > 0 ? (
             <span className="text-xs text-yellow-500" title={`${ext.packages.outdatedCount} outdated`}>
               {ext.packages.outdatedCount}
             </span>

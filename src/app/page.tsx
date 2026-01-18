@@ -5,11 +5,10 @@ import { toast } from 'sonner';
 import { Sidebar } from '@/components/sidebar';
 import { ProjectList } from '@/components/project-list';
 import { ProjectDetail } from '@/components/project-detail';
-import { RightSidebar } from '@/components/right-sidebar';
+import { RightSidebar, type Panel, type PanelType } from '@/components/right-sidebar';
 import { Button } from '@/components/ui/button';
 import type { Project } from '@/lib/types';
 
-type RightPanel = { type: 'logs'; projectId: string } | null;
 type ViewMode = 'list' | 'detail';
 
 export default function Home() {
@@ -17,7 +16,8 @@ export default function Home() {
   const [categories, setCategories] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [rightPanel, setRightPanel] = useState<RightPanel>(null);
+  const [panels, setPanels] = useState<Panel[]>([]);
+  const [activePanel, setActivePanel] = useState<PanelType | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [viewMode, setViewMode] = useState<ViewMode>('list');
@@ -69,9 +69,10 @@ export default function Home() {
       const data = await res.json();
       if (res.ok) {
         toast.success(`Stopped ${project?.name || id}`);
-        // Close right panel if we stopped the project being viewed
-        if (rightPanel?.projectId === id) {
-          setRightPanel(null);
+        // Close logs panel if we stopped the project being viewed
+        const logsPanel = panels.find(p => p.type === 'logs');
+        if (logsPanel && logsPanel.projectId === id) {
+          handleClosePanel('logs');
         }
       } else {
         toast.error(`Failed to stop ${project?.name || id}`, {
@@ -90,12 +91,54 @@ export default function Home() {
   };
 
   const handleViewLogs = (id: string) => {
+    const project = projects.find(p => p.id === id);
     setSelectedProjectId(id);
-    setRightPanel({ type: 'logs', projectId: id });
+    // Add or update logs panel
+    setPanels(prev => {
+      const existing = prev.find(p => p.type === 'logs');
+      if (existing) {
+        return prev.map(p => p.type === 'logs'
+          ? { type: 'logs' as const, projectId: id, projectName: project?.name || id }
+          : p
+        );
+      }
+      return [...prev, { type: 'logs' as const, projectId: id, projectName: project?.name || id }];
+    });
+    setActivePanel('logs');
   };
 
-  const handleCloseRightPanel = () => {
-    setRightPanel(null);
+  const handleOpenPackageHealthPanel = (
+    projectId: string,
+    projectName: string,
+    subType: 'outdated' | 'audit',
+    rawOutput: string
+  ) => {
+    const title = subType === 'outdated' ? 'Package Updates' : 'Security Audit';
+    setPanels(prev => {
+      const existing = prev.find(p => p.type === 'package-health');
+      if (existing) {
+        return prev.map(p => p.type === 'package-health'
+          ? { type: 'package-health' as const, projectId, projectName, subType, rawOutput, title }
+          : p
+        );
+      }
+      return [...prev, { type: 'package-health' as const, projectId, projectName, subType, rawOutput, title }];
+    });
+    setActivePanel('package-health');
+  };
+
+  const handleClosePanel = (type: PanelType) => {
+    setPanels(prev => prev.filter(p => p.type !== type));
+    // If we closed the active panel, switch to another one
+    if (activePanel === type) {
+      const remaining = panels.filter(p => p.type !== type);
+      setActivePanel(remaining.length > 0 ? remaining[0].type : null);
+    }
+  };
+
+  const handleCloseAllPanels = () => {
+    setPanels([]);
+    setActivePanel(null);
   };
 
   const handleClearCache = async (id: string) => {
@@ -167,10 +210,6 @@ export default function Home() {
   }, {} as Record<string, number>);
 
   const runningCount = projects.filter((p) => p.status === 'running').length;
-
-  const rightPanelProject = rightPanel
-    ? projects.find((p) => p.id === rightPanel.projectId)
-    : null;
 
   if (isLoading) {
     return (
@@ -249,16 +288,18 @@ export default function Home() {
             onClearCache={handleClearCache}
             onDeleteLock={handleDeleteLock}
             onRefresh={fetchProjects}
+            onOpenPackageHealthPanel={handleOpenPackageHealthPanel}
           />
         )}
       </main>
 
       {/* Right Sidebar - Panels */}
       <RightSidebar
-        panel={rightPanel?.type || null}
-        onClose={handleCloseRightPanel}
-        projectId={rightPanel?.projectId}
-        projectName={rightPanelProject?.name}
+        panels={panels}
+        activePanel={activePanel}
+        onActivate={setActivePanel}
+        onClose={handleClosePanel}
+        onCloseAll={handleCloseAllPanels}
       />
     </div>
   );

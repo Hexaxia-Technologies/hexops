@@ -29,6 +29,7 @@ import {
   Triangle,
   Rocket,
   Link,
+  Package,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Project } from '@/lib/types';
@@ -47,6 +48,12 @@ interface ProjectDetailProps {
   onClearCache: (id: string) => Promise<void>;
   onDeleteLock: (id: string) => Promise<void>;
   onRefresh: () => void;
+  onOpenPackageHealthPanel?: (
+    projectId: string,
+    projectName: string,
+    subType: 'outdated' | 'audit',
+    rawOutput: string
+  ) => void;
 }
 
 interface Metrics {
@@ -110,6 +117,7 @@ export function ProjectDetail({
   onClearCache,
   onDeleteLock,
   onRefresh,
+  onOpenPackageHealthPanel,
 }: ProjectDetailProps) {
   const [isToggling, setIsToggling] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
@@ -122,6 +130,7 @@ export function ProjectDetail({
   const [vercelDeploying, setVercelDeploying] = useState<string | null>(null);
   const [showStartMenu, setShowStartMenu] = useState(false);
   const [startMode, setStartMode] = useState<'dev' | 'prod' | null>(null);
+  const [isUpdatingPackages, setIsUpdatingPackages] = useState(false);
   const startMenuRef = useRef<HTMLDivElement>(null);
 
   const isRunning = project.status === 'running';
@@ -267,6 +276,26 @@ export function ProjectDetail({
       await onDeleteLock(project.id);
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const handleUpdatePackages = async () => {
+    setIsUpdatingPackages(true);
+    try {
+      const res = await fetch(`/api/projects/${project.id}/update`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        // Refresh to get updated package info
+        onRefresh();
+        // Optionally show the output in the sidebar
+        if (onOpenPackageHealthPanel && data.output) {
+          onOpenPackageHealthPanel(project.id, project.name, 'outdated', data.output);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to update packages:', error);
+    } finally {
+      setIsUpdatingPackages(false);
     }
   };
 
@@ -425,6 +454,30 @@ export function ProjectDetail({
                 <Badge variant="secondary" className="text-xs bg-zinc-800 text-zinc-400">
                   Node {projectInfo.nodeVersion}
                 </Badge>
+              )}
+
+              {project.extended?.packages?.outdatedCount !== undefined && project.extended.packages.outdatedCount > 0 && (
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="text-xs border-yellow-500/50 text-yellow-400">
+                    <Package className="h-3 w-3 mr-1" />
+                    {project.extended.packages.outdatedCount} outdated
+                  </Badge>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className={cn(
+                      'h-6 px-2 text-xs',
+                      project.extended.packages.criticalVulnerabilityCount && project.extended.packages.criticalVulnerabilityCount > 0
+                        ? 'border-red-500/50 text-red-400 hover:bg-red-500/10'
+                        : 'border-yellow-500/50 text-yellow-400 hover:bg-yellow-500/10'
+                    )}
+                    onClick={handleUpdatePackages}
+                    disabled={isUpdatingPackages}
+                  >
+                    <ArrowUp className={cn('h-3 w-3 mr-1', isUpdatingPackages && 'animate-bounce')} />
+                    {isUpdatingPackages ? 'Updating...' : 'Update'}
+                  </Button>
+                </div>
               )}
 
               <span className="text-xs text-zinc-500 font-mono">
@@ -794,7 +847,13 @@ export function ProjectDetail({
         </CollapsibleSection>
 
         <CollapsibleSection title="Package Health">
-          <PackageHealthSection projectId={project.id} projectPath={project.path} />
+          <PackageHealthSection
+            projectId={project.id}
+            projectPath={project.path}
+            projectName={project.name}
+            initialOutdatedCount={project.extended?.packages?.outdatedCount}
+            onOpenPanel={onOpenPackageHealthPanel}
+          />
         </CollapsibleSection>
       </div>
     </div>

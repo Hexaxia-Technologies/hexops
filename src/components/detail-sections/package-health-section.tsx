@@ -9,6 +9,14 @@ import { cn } from '@/lib/utils';
 interface PackageHealthSectionProps {
   projectId: string;
   projectPath: string;
+  projectName: string;
+  initialOutdatedCount?: number;
+  onOpenPanel?: (
+    projectId: string,
+    projectName: string,
+    subType: 'outdated' | 'audit',
+    rawOutput: string
+  ) => void;
 }
 
 interface Dependency {
@@ -34,7 +42,7 @@ interface PackageHealth {
   lastAuditDate?: string;
 }
 
-export function PackageHealthSection({ projectId }: PackageHealthSectionProps) {
+export function PackageHealthSection({ projectId, projectName, initialOutdatedCount, onOpenPanel }: PackageHealthSectionProps) {
   const [health, setHealth] = useState<PackageHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [auditing, setAuditing] = useState(false);
@@ -62,7 +70,12 @@ export function PackageHealthSection({ projectId }: PackageHealthSectionProps) {
     try {
       const res = await fetch(`/api/projects/${projectId}/audit`, { method: 'POST' });
       if (!res.ok) throw new Error('Audit failed');
+      const data = await res.json();
       await fetchHealth();
+      // Open the sidebar panel with raw output
+      if (onOpenPanel && data.rawOutput) {
+        onOpenPanel(projectId, projectName, 'audit', data.rawOutput);
+      }
     } catch (err) {
       console.error('Failed to run audit:', err);
     } finally {
@@ -75,7 +88,12 @@ export function PackageHealthSection({ projectId }: PackageHealthSectionProps) {
     try {
       const res = await fetch(`/api/projects/${projectId}/outdated`, { method: 'POST' });
       if (!res.ok) throw new Error('Outdated check failed');
+      const data = await res.json();
       await fetchHealth();
+      // Open the sidebar panel with raw output
+      if (onOpenPanel && data.rawOutput) {
+        onOpenPanel(projectId, projectName, 'outdated', data.rawOutput);
+      }
     } catch (err) {
       console.error('Failed to check outdated:', err);
     } finally {
@@ -95,7 +113,9 @@ export function PackageHealthSection({ projectId }: PackageHealthSectionProps) {
     return <div className="text-red-400 text-sm">{error || 'No package health data available'}</div>;
   }
 
-  const outdatedCount = [...health.dependencies, ...health.devDependencies].filter(d => d.isOutdated).length;
+  // Use fetched count, or fall back to initial count from dashboard
+  const fetchedOutdatedCount = [...health.dependencies, ...health.devDependencies].filter(d => d.isOutdated).length;
+  const outdatedCount = fetchedOutdatedCount > 0 ? fetchedOutdatedCount : (initialOutdatedCount ?? 0);
   const criticalVulns = health.vulnerabilities.filter(v => v.severity === 'critical' || v.severity === 'high').length;
 
   return (

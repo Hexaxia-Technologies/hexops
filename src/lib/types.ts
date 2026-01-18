@@ -19,6 +19,8 @@ export interface ProjectExtendedStatus {
   };
   packages?: {
     outdatedCount: number;
+    vulnerabilityCount?: number;
+    criticalVulnerabilityCount?: number;
   };
   metrics?: {
     uptime: number; // milliseconds

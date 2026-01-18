@@ -1,7 +1,10 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { existsSync } from 'fs';
+import { join } from 'path';
 import type { ProjectConfig, ProjectExtendedStatus } from './types';
 import { getProcessInfo } from './process-manager';
+import { auditCache } from '@/app/api/projects/[id]/package-health/route';
 
 const execAsync = promisify(exec);
 
@@ -103,24 +106,54 @@ async function getPackageStatus(path: string): Promise<ProjectExtendedStatus['pa
     return { outdatedCount: cached.count };
   }
 
+  // Check for lockfiles to determine which package manager to use
+  const hasPnpmLock = existsSync(join(path, 'pnpm-lock.yaml'));
+  const hasNpmLock = existsSync(join(path, 'package-lock.json'));
+  const hasYarnLock = existsSync(join(path, 'yarn.lock'));
+
+  // No lockfile - can't check outdated packages
+  if (!hasPnpmLock && !hasNpmLock && !hasYarnLock) {
+    return undefined;
+  }
+
   try {
-    // Try pnpm first, then npm
     let stdout = '';
-    try {
-      const result = await execAsync('pnpm outdated --format json 2>/dev/null || echo "[]"', {
-        cwd: path,
-        timeout: 10000
-      });
-      stdout = result.stdout;
-    } catch {
+
+    if (hasPnpmLock) {
       try {
-        const result = await execAsync('npm outdated --json 2>/dev/null || echo "{}"', {
+        const result = await execAsync('pnpm outdated --format json', {
           cwd: path,
           timeout: 10000
         });
         stdout = result.stdout;
-      } catch {
-        return undefined;
+      } catch (err: unknown) {
+        // pnpm outdated exits with code 1 when outdated packages exist
+        const execErr = err as { stdout?: string };
+        stdout = execErr.stdout || '[]';
+      }
+    } else if (hasNpmLock) {
+      try {
+        const result = await execAsync('npm outdated --json', {
+          cwd: path,
+          timeout: 10000
+        });
+        stdout = result.stdout;
+      } catch (err: unknown) {
+        // npm outdated exits with code 1 when outdated packages exist
+        const execErr = err as { stdout?: string };
+        stdout = execErr.stdout || '{}';
+      }
+    } else {
+      // yarn
+      try {
+        const result = await execAsync('yarn outdated --json', {
+          cwd: path,
+          timeout: 10000
+        });
+        stdout = result.stdout;
+      } catch (err: unknown) {
+        const execErr = err as { stdout?: string };
+        stdout = execErr.stdout || '{}';
       }
     }
 
@@ -137,6 +170,25 @@ async function getPackageStatus(path: string): Promise<ProjectExtendedStatus['pa
   } catch {
     return undefined;
   }
+}
+
+// Get vulnerability counts from audit cache
+function getVulnerabilityCounts(projectId: string): { total: number; critical: number } | undefined {
+  const auditData = auditCache.get(projectId);
+  if (!auditData || Date.now() - auditData.timestamp >= CACHE_TTL) {
+    return undefined;
+  }
+
+  const vulnerabilities = auditData.data as Array<{ severity: string }>;
+  if (!Array.isArray(vulnerabilities)) {
+    return undefined;
+  }
+
+  const critical = vulnerabilities.filter(
+    v => v.severity === 'critical' || v.severity === 'high'
+  ).length;
+
+  return { total: vulnerabilities.length, critical };
 }
 
 // Fetch extended status for a single project
@@ -167,6 +219,19 @@ export async function getExtendedStatus(
   }
 
   await Promise.all(promises);
+
+  // Add vulnerability data from audit cache if available
+  const vulnCounts = getVulnerabilityCounts(project.id);
+  if (vulnCounts && extended.packages) {
+    extended.packages.vulnerabilityCount = vulnCounts.total;
+    extended.packages.criticalVulnerabilityCount = vulnCounts.critical;
+  } else if (vulnCounts) {
+    extended.packages = {
+      outdatedCount: 0,
+      vulnerabilityCount: vulnCounts.total,
+      criticalVulnerabilityCount: vulnCounts.critical,
+    };
+  }
 
   return extended;
 }
