@@ -3,8 +3,12 @@ import { appendFileSync, readFileSync, existsSync, mkdirSync, writeFileSync } fr
 import { join } from 'path';
 import type { ProjectConfig, LogEntry } from './types';
 
-// Store active processes in memory
-const activeProcesses = new Map<string, ChildProcess>();
+// Store active processes in memory with metadata
+interface ProcessEntry {
+  process: ChildProcess;
+  startedAt: Date;
+}
+const activeProcesses = new Map<string, ProcessEntry>();
 
 // Log directory path
 const LOGS_DIR = join(process.cwd(), '.hexops', 'logs');
@@ -61,7 +65,10 @@ export function startProject(project: ProjectConfig): { success: boolean; error?
       },
     });
 
-    activeProcesses.set(project.id, child);
+    activeProcesses.set(project.id, {
+      process: child,
+      startedAt: new Date(),
+    });
 
     child.stdout?.on('data', (data: Buffer) => {
       addLogEntry(project.id, 'stdout', data.toString());
@@ -90,10 +97,10 @@ export function startProject(project: ProjectConfig): { success: boolean; error?
 
 export function stopProject(projectId: string, port: number): { success: boolean; error?: string } {
   // First try to kill the tracked process
-  const child = activeProcesses.get(projectId);
-  if (child && !child.killed) {
+  const entry = activeProcesses.get(projectId);
+  if (entry && !entry.process.killed) {
     try {
-      child.kill('SIGTERM');
+      entry.process.kill('SIGTERM');
       activeProcesses.delete(projectId);
       addLogEntry(projectId, 'stdout', 'Process stopped via SIGTERM');
       return { success: true };
@@ -184,6 +191,16 @@ export function getLogs(projectId: string, limit = 100): LogEntry[] {
 
 export function isTracked(projectId: string): boolean {
   return activeProcesses.has(projectId);
+}
+
+export function getProcessInfo(projectId: string): { pid: number | null; startedAt: Date } | null {
+  const entry = activeProcesses.get(projectId);
+  if (!entry) return null;
+
+  return {
+    pid: entry.process.pid ?? null,
+    startedAt: entry.startedAt,
+  };
 }
 
 export function getTrackedProcesses(): string[] {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -8,10 +8,24 @@ import {
   ExternalLink,
   Play,
   Square,
+  RotateCcw,
   RefreshCw,
   Trash2,
   ChevronDown,
   ChevronRight,
+  Terminal,
+  FolderOpen,
+  Code,
+  Clock,
+  Cpu,
+  Activity,
+  Wifi,
+  Hash,
+  GitBranch,
+  GitCommit,
+  ArrowDown,
+  ArrowUp,
+  AlertCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Project } from '@/lib/types';
@@ -32,6 +46,35 @@ interface ProjectDetailProps {
   onRefresh: () => void;
 }
 
+interface Metrics {
+  status: 'running' | 'stopped';
+  process: {
+    pid: number | null;
+    uptime: number | null;
+    memoryMB: number | null;
+    cpuPercent: number | null;
+    command: string | null;
+  };
+  port: {
+    isOpen: boolean;
+    responseTimeMs: number | null;
+  };
+  startedAt: string | null;
+}
+
+interface GitInfo {
+  branch: string;
+  lastCommit: {
+    hash: string;
+    message: string;
+    author: string;
+    date: string;
+  };
+  isDirty: boolean;
+  uncommittedCount: number;
+  untrackedCount: number;
+}
+
 export function ProjectDetail({
   project,
   onBack,
@@ -42,21 +85,80 @@ export function ProjectDetail({
   onRefresh,
 }: ProjectDetailProps) {
   const [isToggling, setIsToggling] = useState(false);
+  const [isRestarting, setIsRestarting] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [gitInfo, setGitInfo] = useState<GitInfo | null>(null);
+  const [gitLoading, setGitLoading] = useState<string | null>(null);
 
   const isRunning = project.status === 'running';
 
-  const handleToggle = async () => {
+  // Fetch metrics
+  const fetchMetrics = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/projects/${project.id}/metrics`);
+      if (res.ok) {
+        const data = await res.json();
+        setMetrics(data);
+      }
+    } catch {
+      // Silently fail - metrics are optional
+    }
+  }, [project.id]);
+
+  // Fetch git info
+  const fetchGitInfo = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/projects/${project.id}/git`);
+      if (res.ok) {
+        const data = await res.json();
+        setGitInfo(data);
+      }
+    } catch {
+      // Silently fail - git info is optional
+    }
+  }, [project.id]);
+
+  // Poll metrics every 5 seconds when running, fetch git info on mount
+  useEffect(() => {
+    fetchMetrics();
+    fetchGitInfo();
+    if (isRunning) {
+      const interval = setInterval(fetchMetrics, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [isRunning, fetchMetrics, fetchGitInfo]);
+
+  const handleStart = async () => {
     setIsToggling(true);
     try {
-      if (isRunning) {
-        await onStop(project.id);
-      } else {
-        await onStart(project.id);
-      }
+      await onStart(project.id);
       onRefresh();
     } finally {
       setIsToggling(false);
+    }
+  };
+
+  const handleStop = async () => {
+    setIsToggling(true);
+    try {
+      await onStop(project.id);
+      onRefresh();
+    } finally {
+      setIsToggling(false);
+    }
+  };
+
+  const handleRestart = async () => {
+    setIsRestarting(true);
+    try {
+      await onStop(project.id);
+      // Brief delay before starting
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await onStart(project.id);
+      onRefresh();
+    } finally {
+      setIsRestarting(false);
     }
   };
 
@@ -78,9 +180,64 @@ export function ProjectDetail({
     }
   };
 
+  const handleGitPull = async () => {
+    setGitLoading('pull');
+    try {
+      const res = await fetch(`/api/projects/${project.id}/git-pull`, { method: 'POST' });
+      if (res.ok) {
+        await fetchGitInfo();
+      }
+    } catch {
+      // Silently fail
+    } finally {
+      setGitLoading(null);
+    }
+  };
+
+  const handleGitPush = async () => {
+    setGitLoading('push');
+    try {
+      const res = await fetch(`/api/projects/${project.id}/git-push`, { method: 'POST' });
+      if (res.ok) {
+        await fetchGitInfo();
+      }
+    } catch {
+      // Silently fail
+    } finally {
+      setGitLoading(null);
+    }
+  };
+
+  const openInIDE = () => {
+    // Uses code command (VS Code)
+    window.open(`vscode://file${project.path}`, '_blank');
+  };
+
+  const openTerminal = () => {
+    // This would need a backend endpoint to actually open terminal
+    // For now, copy path to clipboard
+    navigator.clipboard.writeText(`cd ${project.path}`);
+  };
+
+  const openFileManager = () => {
+    // This would need a backend endpoint to open file manager
+    // For now, copy path to clipboard
+    navigator.clipboard.writeText(project.path);
+  };
+
+  // Format uptime
+  const formatUptime = (seconds: number | null): string => {
+    if (seconds === null) return '-';
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+    const hours = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    return `${hours}h ${mins}m`;
+  };
+
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
+      {/* Minimal Header */}
       <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 flex-shrink-0">
         <div className="flex items-center gap-4">
           <Button
@@ -110,7 +267,7 @@ export function ProjectDetail({
                 <span
                   className={cn(
                     'w-1.5 h-1.5 rounded-full mr-1.5',
-                    isRunning ? 'bg-green-500' : 'bg-zinc-600'
+                    isRunning ? 'bg-green-500 animate-pulse' : 'bg-zinc-600'
                   )}
                 />
                 {isRunning ? 'Running' : 'Stopped'}
@@ -122,71 +279,232 @@ export function ProjectDetail({
             <p className="text-xs text-zinc-500 mt-0.5 font-mono">{project.path}</p>
           </div>
         </div>
-
-        <div className="flex items-center gap-2">
-          {isRunning && (
-            <a
-              href={`http://localhost:${project.port}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 h-8 px-3 text-xs text-purple-400 hover:text-purple-300 hover:bg-zinc-800 rounded-md transition-colors"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              Open in Browser
-            </a>
-          )}
-
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 text-xs text-zinc-400 hover:text-zinc-100"
-            onClick={handleClearCache}
-            disabled={actionLoading === 'cache'}
-          >
-            <RefreshCw className={cn('h-3.5 w-3.5 mr-1.5', actionLoading === 'cache' && 'animate-spin')} />
-            Clear Cache
-          </Button>
-
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 text-xs text-zinc-400 hover:text-zinc-100"
-            onClick={handleDeleteLock}
-            disabled={actionLoading === 'lock'}
-          >
-            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-            Delete Lock
-          </Button>
-
-          <Button
-            variant={isRunning ? 'destructive' : 'default'}
-            size="sm"
-            className={cn(
-              'h-8 text-xs',
-              !isRunning && 'bg-purple-600 hover:bg-purple-700'
-            )}
-            onClick={handleToggle}
-            disabled={isToggling}
-          >
-            {isToggling ? (
-              '...'
-            ) : isRunning ? (
-              <>
-                <Square className="h-3.5 w-3.5 mr-1.5" />
-                Stop
-              </>
-            ) : (
-              <>
-                <Play className="h-3.5 w-3.5 mr-1.5" />
-                Start
-              </>
-            )}
-          </Button>
-        </div>
       </header>
 
-      {/* Content - Collapsible Sections */}
+      {/* Content */}
       <div className="flex-1 overflow-auto p-6 space-y-4">
+        {/* Control Panel */}
+        <div className="border border-zinc-800 rounded-lg bg-zinc-900/50 p-4 space-y-4">
+          {/* Git Status Row */}
+          {gitInfo && (
+            <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <GitBranch className="h-4 w-4 text-zinc-500" />
+                  <span className="text-sm font-medium text-zinc-200">{gitInfo.branch}</span>
+                </div>
+
+                {gitInfo.isDirty && (
+                  <Badge variant="outline" className="text-xs border-yellow-500/50 text-yellow-400">
+                    <AlertCircle className="h-3 w-3 mr-1" />
+                    {gitInfo.uncommittedCount} modified
+                  </Badge>
+                )}
+
+                {gitInfo.untrackedCount > 0 && (
+                  <span className="text-xs text-zinc-500">
+                    +{gitInfo.untrackedCount} untracked
+                  </span>
+                )}
+
+                <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                  <GitCommit className="h-3.5 w-3.5" />
+                  <span className="font-mono">{gitInfo.lastCommit.hash}</span>
+                  <span className="truncate max-w-[200px]">{gitInfo.lastCommit.message}</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 text-xs text-zinc-400 hover:text-zinc-100"
+                  onClick={handleGitPull}
+                  disabled={gitLoading === 'pull'}
+                >
+                  <ArrowDown className={cn('h-3.5 w-3.5 mr-1', gitLoading === 'pull' && 'animate-bounce')} />
+                  Pull
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 text-xs text-zinc-400 hover:text-zinc-100"
+                  onClick={handleGitPush}
+                  disabled={gitLoading === 'push' || !gitInfo.isDirty}
+                  title={gitInfo.isDirty ? 'Push commits' : 'No changes to push'}
+                >
+                  <ArrowUp className={cn('h-3.5 w-3.5 mr-1', gitLoading === 'push' && 'animate-bounce')} />
+                  Push
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 text-xs text-zinc-400 hover:text-zinc-100"
+                  onClick={fetchGitInfo}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Metrics Bar */}
+          <div className="flex items-center gap-6 pb-4 border-b border-zinc-800">
+            <MetricItem
+              icon={<Clock className="h-4 w-4" />}
+              label="Uptime"
+              value={isRunning ? formatUptime(metrics?.process.uptime ?? null) : '-'}
+              active={isRunning}
+            />
+            <MetricItem
+              icon={<Cpu className="h-4 w-4" />}
+              label="Memory"
+              value={metrics?.process.memoryMB ? `${metrics.process.memoryMB} MB` : '-'}
+              active={isRunning && metrics?.process.memoryMB !== null}
+            />
+            <MetricItem
+              icon={<Activity className="h-4 w-4" />}
+              label="CPU"
+              value={metrics?.process.cpuPercent !== null ? `${metrics?.process.cpuPercent}%` : '-'}
+              active={isRunning && metrics?.process.cpuPercent !== null}
+            />
+            <MetricItem
+              icon={<Wifi className="h-4 w-4" />}
+              label="Port"
+              value={metrics?.port.isOpen ? `${metrics.port.responseTimeMs}ms` : 'Closed'}
+              active={metrics?.port.isOpen ?? false}
+              color={metrics?.port.isOpen ? 'green' : 'red'}
+            />
+            <MetricItem
+              icon={<Hash className="h-4 w-4" />}
+              label="PID"
+              value={metrics?.process.pid?.toString() ?? '-'}
+              active={isRunning && metrics?.process.pid !== null}
+            />
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex items-center justify-between">
+            {/* Primary Actions */}
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                className={cn(
+                  'h-9 text-xs',
+                  isRunning
+                    ? 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
+                    : 'bg-green-600 hover:bg-green-700 text-white'
+                )}
+                onClick={handleStart}
+                disabled={isToggling || isRestarting || isRunning}
+              >
+                <Play className="h-3.5 w-3.5 mr-1.5" />
+                Start
+              </Button>
+
+              <Button
+                size="sm"
+                variant="destructive"
+                className="h-9 text-xs"
+                onClick={handleStop}
+                disabled={isToggling || isRestarting || !isRunning}
+              >
+                <Square className="h-3.5 w-3.5 mr-1.5" />
+                Stop
+              </Button>
+
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-9 text-xs border-zinc-700 hover:bg-zinc-800"
+                onClick={handleRestart}
+                disabled={isToggling || isRestarting || !isRunning}
+              >
+                <RotateCcw className={cn('h-3.5 w-3.5 mr-1.5', isRestarting && 'animate-spin')} />
+                Restart
+              </Button>
+            </div>
+
+            {/* Utility Actions */}
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-9 text-xs text-zinc-400 hover:text-zinc-100"
+                onClick={openInIDE}
+                title="Open in VS Code"
+              >
+                <Code className="h-3.5 w-3.5 mr-1.5" />
+                IDE
+              </Button>
+
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-9 text-xs text-zinc-400 hover:text-zinc-100"
+                onClick={openTerminal}
+                title="Copy cd command to clipboard"
+              >
+                <Terminal className="h-3.5 w-3.5 mr-1.5" />
+                Terminal
+              </Button>
+
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-9 text-xs text-zinc-400 hover:text-zinc-100"
+                onClick={openFileManager}
+                title="Copy path to clipboard"
+              >
+                <FolderOpen className="h-3.5 w-3.5 mr-1.5" />
+                Files
+              </Button>
+
+              {isRunning && (
+                <a
+                  href={`http://localhost:${project.port}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 h-9 px-3 text-xs text-purple-400 hover:text-purple-300 hover:bg-zinc-800 rounded-md transition-colors"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  Browser
+                </a>
+              )}
+
+              <div className="h-6 w-px bg-zinc-700 mx-1" />
+
+              {/* Cache Tools */}
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-9 text-xs text-zinc-400 hover:text-zinc-100"
+                onClick={handleClearCache}
+                disabled={actionLoading === 'cache'}
+                title="Clear .next cache"
+              >
+                <RefreshCw className={cn('h-3.5 w-3.5 mr-1.5', actionLoading === 'cache' && 'animate-spin')} />
+                Clear Cache
+              </Button>
+
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-9 text-xs text-zinc-400 hover:text-zinc-100"
+                onClick={handleDeleteLock}
+                disabled={actionLoading === 'lock'}
+                title="Delete pnpm-lock.yaml"
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+                Delete Lock
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        {/* Collapsible Sections */}
         <CollapsibleSection title="Logs" defaultOpen={isRunning}>
           <LogsSection projectId={project.id} isRunning={isRunning} />
         </CollapsibleSection>
@@ -202,6 +520,33 @@ export function ProjectDetail({
         <CollapsibleSection title="Package Health">
           <PackageHealthSection projectId={project.id} projectPath={project.path} />
         </CollapsibleSection>
+      </div>
+    </div>
+  );
+}
+
+// Metric display item
+interface MetricItemProps {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  active?: boolean;
+  color?: 'green' | 'red' | 'default';
+}
+
+function MetricItem({ icon, label, value, active = false, color = 'default' }: MetricItemProps) {
+  const colorClass = {
+    green: 'text-green-400',
+    red: 'text-red-400',
+    default: active ? 'text-zinc-100' : 'text-zinc-500',
+  }[color];
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className={cn('text-zinc-500', active && 'text-zinc-400')}>{icon}</span>
+      <div className="flex flex-col">
+        <span className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</span>
+        <span className={cn('text-sm font-mono', colorClass)}>{value}</span>
       </div>
     </div>
   );
