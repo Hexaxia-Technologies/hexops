@@ -321,7 +321,7 @@ export default function PatchesPage() {
                 className={cn(
                   'flex items-center gap-4 p-4 rounded-lg border transition-colors cursor-pointer',
                   isSelected
-                    ? 'bg-purple-500/10 border-purple-500,30'
+                    ? 'bg-purple-500/10 border-purple-500/30'
                     : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700'
                 )}
                 onClick={() => toggleSelection(key)}
