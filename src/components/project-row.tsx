@@ -88,7 +88,7 @@ export function ProjectRow({
       transition={{ duration: 0.15 }}
       onClick={() => onSelect(project.id)}
       className={cn(
-        'grid grid-cols-[24px_1fr_80px_64px_28px_28px_28px_28px_56px_72px] items-center gap-3 px-4 py-3 border-b border-zinc-800/50 cursor-pointer transition-colors',
+        'grid grid-cols-[48px_1fr_80px_64px_28px_28px_28px_28px_56px_72px] items-center gap-3 px-4 py-3 border-b border-zinc-800/50 cursor-pointer transition-colors',
         isSelected
           ? 'bg-zinc-800/80 border-l-2 border-l-purple-500'
           : 'hover:bg-zinc-900/50'
