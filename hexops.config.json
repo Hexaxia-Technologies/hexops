@@ -1,0 +1,159 @@
+{
+  "projects": [
+    {
+      "id": "hexops",
+      "name": "HexOps",
+      "path": "/home/aaron/Projects/hexops",
+      "port": 3000,
+      "category": "Internal",
+      "scripts": {
+        "dev": "pnpm dev",
+        "build": "pnpm build"
+      }
+    },
+    {
+      "id": "sailbot",
+      "name": "SailBot",
+      "path": "/home/aaron/Projects/sailbot",
+      "port": 3010,
+      "category": "Product",
+      "scripts": {
+        "dev": "pnpm dev",
+        "build": "pnpm build"
+      }
+    },
+    {
+      "id": "hexcms-studio",
+      "name": "HexCMS Studio",
+      "path": "/home/aaron/Projects/hexcms-studio",
+      "port": 3020,
+      "category": "Internal",
+      "scripts": {
+        "dev": "pnpm dev",
+        "build": "pnpm build"
+      }
+    },
+    {
+      "id": "ke-agent",
+      "name": "KE-Agent",
+      "path": "/home/aaron/Projects/ke-agent",
+      "port": 3030,
+      "category": "Client",
+      "scripts": {
+        "dev": "pnpm dev",
+        "build": "pnpm build"
+      }
+    },
+    {
+      "id": "ddts",
+      "name": "DDTS",
+      "path": "/home/aaron/Projects/ddts",
+      "port": 3040,
+      "category": "Client",
+      "scripts": {
+        "dev": "pnpm dev",
+        "build": "pnpm build"
+      }
+    },
+    {
+      "id": "lyfe-uncharted",
+      "name": "Lyfe Uncharted",
+      "path": "/home/aaron/Projects/lyfe-uncharted",
+      "port": 3050,
+      "category": "Personal",
+      "scripts": {
+        "dev": "pnpm dev",
+        "build": "pnpm build"
+      }
+    },
+    {
+      "id": "hamradiotoday",
+      "name": "Ham Radio Today",
+      "path": "/home/aaron/Projects/hamradiotoday",
+      "port": 3060,
+      "category": "Personal",
+      "scripts": {
+        "dev": "pnpm dev",
+        "build": "pnpm build"
+      }
+    },
+    {
+      "id": "hexaxia-ai",
+      "name": "hexaxia.ai",
+      "path": "/home/aaron/Projects/hexaxia.ai-dev",
+      "port": 3070,
+      "category": "Internal",
+      "scripts": {
+        "dev": "pnpm dev",
+        "build": "pnpm build"
+      }
+    },
+    {
+      "id": "hexaxia-tech",
+      "name": "hexaxia.tech",
+      "path": "/home/aaron/Projects/hexaxia.tech",
+      "port": 3080,
+      "category": "Internal",
+      "scripts": {
+        "dev": "pnpm dev",
+        "build": "pnpm build"
+      }
+    },
+    {
+      "id": "hextant",
+      "name": "Hextant",
+      "path": "/home/aaron/Projects/hextant-projects/hextant",
+      "port": 3090,
+      "category": "Product",
+      "scripts": {
+        "dev": "pnpm dev",
+        "build": "pnpm build"
+      }
+    },
+    {
+      "id": "agent-forge",
+      "name": "AgentForge",
+      "path": "/home/aaron/Projects/agent-forge",
+      "port": 3100,
+      "category": "Product",
+      "scripts": {
+        "dev": "pnpm dev",
+        "build": "pnpm build"
+      }
+    },
+    {
+      "id": "hexcms",
+      "name": "HexCMS",
+      "path": "/home/aaron/Projects/hexcms",
+      "port": 3110,
+      "category": "Internal",
+      "scripts": {
+        "dev": "pnpm dev",
+        "build": "pnpm build"
+      }
+    },
+    {
+      "id": "sailbot-ai",
+      "name": "sailbot.ai",
+      "path": "/home/aaron/Projects/sailbot.ai",
+      "port": 3120,
+      "category": "Product",
+      "scripts": {
+        "dev": "pnpm dev",
+        "build": "pnpm build"
+      }
+    },
+    {
+      "id": "sailbot-admin",
+      "name": "SailBot Admin",
+      "path": "/home/aaron/Projects/sailbot-admin",
+      "port": 3002,
+      "category": "Product",
+      "scripts": {
+        "dev": "pnpm dev",
+        "build": "pnpm build"
+      }
+    }
+  ],
+  "categories": ["Product", "Client", "Internal", "Personal"]
+}

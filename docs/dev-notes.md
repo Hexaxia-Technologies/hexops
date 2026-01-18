@@ -1,0 +1,186 @@
+# HexOps Development Notes
+
+**Current Version:** 0.2.0
+**Purpose:** Internal development operations dashboard for managing Hexaxia project dev servers. Start/stop projects, view logs, clear caches, and monitor status from a single interface.
+
+---
+
+## Version History
+
+### v0.2.0 (2026-01-18)
+- Refactored from card grid layout to row-based list layout
+- Added right sidebar panel system (currently hosts log viewer)
+- Fixed column alignment using CSS Grid with fixed widths
+- Added column headers to project list
+- Icons now always render (grayed out when inactive) for consistent spacing
+- Added AnimatePresence for smooth sidebar transitions
+
+### v0.1.0 (2026-01-16)
+- Initial project creation with Create Next App
+- Card-based project grid with responsive columns
+- Left sidebar with category/status filtering
+- Project actions: Start, Stop, View Logs, Clear Cache, Delete Lock
+- Process manager for spawning/killing dev servers
+- Log streaming with auto-scroll
+- Toast notifications for action feedback
+
+---
+
+## Recent Changes
+
+### Row Layout & Right Sidebar (v0.2.0)
+
+**Summary:** Replaced card grid with a row-based list for better scanning. Added extensible right sidebar for panels (logs first, more to come).
+
+| File | Change |
+|------|--------|
+| `src/components/project-row.tsx` | New - horizontal row component with CSS Grid layout |
+| `src/components/project-list.tsx` | New - vertical list container with sticky header |
+| `src/components/right-sidebar.tsx` | New - animated panel container, hosts LogPanel |
+| `src/components/project-card.tsx` | Deprecated - replaced by project-row |
+| `src/components/project-grid.tsx` | Deprecated - replaced by project-list |
+| `src/app/page.tsx` | Updated layout for 3-column structure, added AnimatePresence |
+
+**Key Insights:**
+- CSS Grid (`grid-cols-[24px_1fr_80px_64px_200px]`) is better than flexbox for table-like layouts - ensures columns stay aligned regardless of content
+- Always-render pattern for optional icons: render but style as invisible (`text-zinc-700`) to maintain layout consistency
+- Framer Motion width animations are tricky in flex containers; x-translate with fixed width is more reliable
+- `flex-shrink-0` is essential on sidebars to prevent compression
+
+---
+
+## Architecture Patterns
+
+### Data Flow
+
+```
+hexops.config.json → API routes → React state → Components
+       ↓
+   Project paths → Process Manager → Child processes (dev servers)
+       ↓
+   .hexops/logs/ → Log API → LogPanel component
+```
+
+### Component Hierarchy
+
+```
+page.tsx
+├── Sidebar (left) - navigation, filters
+├── main
+│   ├── header - title, refresh button
+│   └── ProjectList
+│       └── ProjectRow[] - each project
+└── RightSidebar - panels (logs, future: details)
+    └── LogPanel - live log streaming
+```
+
+### State Management
+
+- **Local React state** - No external state library needed at this scale
+- `projects[]` - All project configs with runtime status
+- `selectedProjectId` - Currently highlighted row
+- `rightPanel` - Discriminated union: `{ type: 'logs', projectId } | null`
+- `selectedCategory` - Filter state for left sidebar
+
+### API Routes
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/projects` | GET | List all projects with status |
+| `/api/projects/[id]/start` | POST | Start dev server |
+| `/api/projects/[id]/stop` | POST | Stop dev server |
+| `/api/projects/[id]/logs` | GET | Get recent log entries |
+| `/api/projects/[id]/clear-cache` | POST | Delete .next directory |
+| `/api/projects/[id]/delete-lock` | POST | Remove lock files |
+
+### Process Management
+
+- Uses Node.js `child_process.spawn()` for dev servers
+- PIDs tracked in memory (ProcessManager singleton)
+- Logs written to `.hexops/logs/{projectId}.log`
+- Graceful shutdown with SIGTERM, fallback to SIGKILL
+
+---
+
+## Common Issues & Solutions
+
+### Column Alignment Shifts
+**Problem:** Columns misalign when content differs (e.g., running vs stopped projects)
+**Solution:** Use CSS Grid with fixed column widths. Always render all elements, use opacity/color to hide inactive ones.
+
+### Right Sidebar Not Appearing
+**Problem:** Width animation from 0 doesn't work well in flex containers
+**Solution:** Use fixed width (`w-[400px]`) with x-translate animation instead. Add `flex-shrink-0` to prevent compression.
+
+### Framer Motion Exit Animations Not Working
+**Problem:** Components disappear instantly without exit animation
+**Solution:** Wrap conditional renders in `<AnimatePresence>` at the parent level, ensure `key` prop is set on animated elements.
+
+### Port Already in Use
+**Problem:** Project won't start because port is occupied
+**Solution:** Check `.hexops/logs/` for orphaned processes. Use `lsof -i :PORT` to find and kill. Consider adding port-check before start.
+
+### Stale Process State
+**Problem:** UI shows "running" but dev server crashed
+**Solution:** Refresh fetches fresh status every 5 seconds. Could add health checks in future.
+
+---
+
+## Tech Stack Reference
+
+| Technology | Purpose | Version |
+|------------|---------|---------|
+| Next.js | React framework, API routes | 16.1.2 |
+| React | UI library | 19.2.3 |
+| TypeScript | Type safety | ^5 |
+| Tailwind CSS | Styling | ^4 |
+| Framer Motion | Animations | ^12.26.2 |
+| Radix UI | Accessible primitives (Dialog, ScrollArea) | Various |
+| shadcn/ui | Component library (Button, Badge, Card) | N/A (copied) |
+| Lucide React | Icons | ^0.562.0 |
+| Sonner | Toast notifications | ^2.0.7 |
+| pnpm | Package manager | Latest |
+
+---
+
+## Configuration
+
+### hexops.config.json Structure
+
+```json
+{
+  "projects": [
+    {
+      "id": "project-id",
+      "name": "Display Name",
+      "path": "/absolute/path/to/project",
+      "port": 3000,
+      "category": "Product|Client|Internal|Personal",
+      "scripts": {
+        "dev": "pnpm dev",
+        "build": "pnpm build"
+      }
+    }
+  ],
+  "categories": ["Product", "Client", "Internal", "Personal"]
+}
+```
+
+### Adding a New Project
+
+1. Add entry to `hexops.config.json`
+2. Ensure unique port number (check existing assignments)
+3. Verify path exists and has valid package.json
+4. Refresh HexOps UI
+
+---
+
+## Future Considerations
+
+- [ ] Project health checks (ping endpoints)
+- [ ] Dependency vulnerability scanning
+- [ ] Batch operations (start all, stop all)
+- [ ] Project details panel in right sidebar
+- [ ] Git status integration
+- [ ] Build/deploy triggers
+- [ ] Keyboard shortcuts (j/k navigation, Enter to start)
