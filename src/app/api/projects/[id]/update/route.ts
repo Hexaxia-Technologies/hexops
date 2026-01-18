@@ -86,8 +86,19 @@ export async function POST(
           continue;
         }
 
-        let installCmd: string;
+        // Sanitize version - only allow valid semver-like versions
         const targetVersion = pkg.toVersion || 'latest';
+        if (!/^(latest|next|canary|[\w\-.^~<>=|@]+)$/i.test(targetVersion)) {
+          results.push({
+            package: pkg.name,
+            success: false,
+            output: '',
+            error: 'Invalid version specifier',
+          });
+          continue;
+        }
+
+        let installCmd: string;
         if (packageManager === 'pnpm') {
           installCmd = `pnpm add ${pkg.name}@${targetVersion}`;
         } else if (packageManager === 'npm') {
@@ -167,16 +178,26 @@ export async function POST(
         cmd = 'yarn upgrade';
       }
 
-      const { stdout, stderr } = await execAsync(cmd, {
-        cwd,
-        timeout: 120000,
-      });
+      try {
+        const { stdout, stderr } = await execAsync(cmd, {
+          cwd,
+          timeout: 120000,
+        });
 
-      results.push({
-        package: '*',
-        success: true,
-        output: stdout + (stderr ? `\n${stderr}` : ''),
-      });
+        results.push({
+          package: '*',
+          success: true,
+          output: stdout + (stderr ? `\n${stderr}` : ''),
+        });
+      } catch (err) {
+        const execErr = err as { stdout?: string; stderr?: string; message?: string };
+        results.push({
+          package: '*',
+          success: false,
+          output: execErr.stdout || '',
+          error: execErr.message || 'Update failed',
+        });
+      }
     }
 
     // Invalidate cache for this project
