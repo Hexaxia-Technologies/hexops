@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import type {
   PatchState,
@@ -50,7 +50,11 @@ export function readPatchState(): PatchState {
  */
 export function writePatchState(state: PatchState): void {
   ensurePatchStorageDir();
-  writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+  try {
+    writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+  } catch {
+    // Ignore write errors
+  }
 }
 
 /**
@@ -86,13 +90,18 @@ export function readPatchHistory(): PatchHistory {
  * Add entry to patch history
  */
 export function addPatchHistoryEntry(entry: PatchHistoryEntry): void {
+  ensurePatchStorageDir();
   const history = readPatchHistory();
   history.updates.unshift(entry); // Most recent first
   // Keep last 500 entries
   if (history.updates.length > 500) {
     history.updates = history.updates.slice(0, 500);
   }
-  writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
+  try {
+    writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
+  } catch {
+    // Ignore write errors
+  }
 }
 
 /**
@@ -137,7 +146,11 @@ export function readProjectCache(projectId: string): ProjectPatchCache | null {
 export function writeProjectCache(cache: ProjectPatchCache): void {
   ensurePatchStorageDir();
   const cacheFile = getCacheFilePath(cache.projectId);
-  writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
+  try {
+    writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
+  } catch {
+    // Ignore write errors
+  }
 }
 
 /**
@@ -162,11 +175,11 @@ export function createProjectCache(
  * Invalidate cache for a project
  */
 export function invalidateProjectCache(projectId: string): void {
+  ensurePatchStorageDir();
   const cacheFile = getCacheFilePath(projectId);
   if (existsSync(cacheFile)) {
     try {
-      const fs = require('fs');
-      fs.unlinkSync(cacheFile);
+      unlinkSync(cacheFile);
     } catch {
       // Ignore deletion errors
     }
