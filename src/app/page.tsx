@@ -4,11 +4,13 @@ import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import { Sidebar } from '@/components/sidebar';
 import { ProjectList } from '@/components/project-list';
+import { ProjectDetail } from '@/components/project-detail';
 import { RightSidebar } from '@/components/right-sidebar';
 import { Button } from '@/components/ui/button';
 import type { Project } from '@/lib/types';
 
 type RightPanel = { type: 'logs'; projectId: string } | null;
+type ViewMode = 'list' | 'detail';
 
 export default function Home() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -18,6 +20,8 @@ export default function Home() {
   const [rightPanel, setRightPanel] = useState<RightPanel>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [detailProjectId, setDetailProjectId] = useState<string | null>(null);
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -132,6 +136,24 @@ export default function Home() {
     }
   };
 
+  const handleViewDetails = (id: string) => {
+    setDetailProjectId(id);
+    setViewMode('detail');
+  };
+
+  const handleBackToList = () => {
+    setViewMode('list');
+    setDetailProjectId(null);
+  };
+
+  const handleSelectCategory = (category: string | null) => {
+    setSelectedCategory(category);
+    // Return to list view when changing category
+    if (viewMode === 'detail') {
+      handleBackToList();
+    }
+  };
+
   // Filter projects based on selected category
   const filteredProjects = projects.filter((project) => {
     if (selectedCategory === null) return true;
@@ -166,56 +188,71 @@ export default function Home() {
       <Sidebar
         categories={categories}
         selectedCategory={selectedCategory}
-        onSelectCategory={setSelectedCategory}
+        onSelectCategory={handleSelectCategory}
         projectCounts={projectCounts}
         runningCount={runningCount}
         totalCount={projects.length}
       />
 
-      {/* Main Content - Project List */}
+      {/* Main Content - List or Detail View */}
       <main className="flex-1 flex flex-col overflow-hidden">
-        <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
-          <div>
-            <h2 className="text-lg font-medium text-zinc-100">
-              {selectedCategory === null
-                ? 'All Projects'
-                : selectedCategory === 'running'
-                ? 'Running Projects'
-                : selectedCategory === 'stopped'
-                ? 'Stopped Projects'
-                : selectedCategory}
-            </h2>
-            <p className="text-xs text-zinc-500">
-              {filteredProjects.length} project{filteredProjects.length !== 1 ? 's' : ''}
-            </p>
-          </div>
-          <div className="flex items-center gap-4">
-            <span className="text-xs text-zinc-600">
-              Last updated: {lastRefresh.toLocaleTimeString()}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-xs border-zinc-700 text-zinc-300 hover:bg-zinc-800"
-              onClick={fetchProjects}
-            >
-              Refresh
-            </Button>
-          </div>
-        </header>
+        {viewMode === 'list' ? (
+          <>
+            <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
+              <div>
+                <h2 className="text-lg font-medium text-zinc-100">
+                  {selectedCategory === null
+                    ? 'All Projects'
+                    : selectedCategory === 'running'
+                    ? 'Running Projects'
+                    : selectedCategory === 'stopped'
+                    ? 'Stopped Projects'
+                    : selectedCategory}
+                </h2>
+                <p className="text-xs text-zinc-500">
+                  {filteredProjects.length} project{filteredProjects.length !== 1 ? 's' : ''}
+                </p>
+              </div>
+              <div className="flex items-center gap-4">
+                <span className="text-xs text-zinc-600">
+                  Last updated: {lastRefresh.toLocaleTimeString()}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-xs border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                  onClick={fetchProjects}
+                >
+                  Refresh
+                </Button>
+              </div>
+            </header>
 
-        <div className="flex-1 overflow-auto">
-          <ProjectList
-            projects={filteredProjects}
-            selectedId={selectedProjectId}
-            onSelect={handleSelect}
+            <div className="flex-1 overflow-auto">
+              <ProjectList
+                projects={filteredProjects}
+                selectedId={selectedProjectId}
+                onSelect={handleSelect}
+                onStart={handleStart}
+                onStop={handleStop}
+                onViewLogs={handleViewLogs}
+                onViewDetails={handleViewDetails}
+                onClearCache={handleClearCache}
+                onDeleteLock={handleDeleteLock}
+              />
+            </div>
+          </>
+        ) : (
+          <ProjectDetail
+            project={projects.find(p => p.id === detailProjectId)!}
+            onBack={handleBackToList}
             onStart={handleStart}
             onStop={handleStop}
-            onViewLogs={handleViewLogs}
             onClearCache={handleClearCache}
             onDeleteLock={handleDeleteLock}
+            onRefresh={fetchProjects}
           />
-        </div>
+        )}
       </main>
 
       {/* Right Sidebar - Panels */}

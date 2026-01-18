@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { ExternalLink, FileText, Trash2, RefreshCw } from 'lucide-react';
+import { ExternalLink, FileText, Trash2, RefreshCw, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Project } from '@/lib/types';
 
@@ -15,6 +15,7 @@ interface ProjectRowProps {
   onStart: (id: string) => Promise<void>;
   onStop: (id: string) => Promise<void>;
   onViewLogs: (id: string) => void;
+  onViewDetails: (id: string) => void;
   onClearCache: (id: string) => Promise<void>;
   onDeleteLock: (id: string) => Promise<void>;
 }
@@ -26,6 +27,7 @@ export function ProjectRow({
   onStart,
   onStop,
   onViewLogs,
+  onViewDetails,
   onClearCache,
   onDeleteLock,
 }: ProjectRowProps) {
@@ -71,6 +73,11 @@ export function ProjectRow({
     onViewLogs(project.id);
   };
 
+  const handleViewDetails = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onViewDetails(project.id);
+  };
+
   const isRunning = project.status === 'running';
 
   return (
@@ -81,7 +88,7 @@ export function ProjectRow({
       transition={{ duration: 0.15 }}
       onClick={() => onSelect(project.id)}
       className={cn(
-        'grid grid-cols-[24px_1fr_80px_64px_200px] items-center gap-4 px-4 py-3 border-b border-zinc-800/50 cursor-pointer transition-colors',
+        'grid grid-cols-[24px_1fr_80px_64px_260px] items-center gap-4 px-4 py-3 border-b border-zinc-800/50 cursor-pointer transition-colors',
         isSelected
           ? 'bg-zinc-800/80 border-l-2 border-l-purple-500'
           : 'hover:bg-zinc-900/50'
@@ -203,6 +210,17 @@ export function ProjectRow({
           disabled={isLoading}
         >
           {isLoading ? '...' : isRunning ? 'Stop' : 'Start'}
+        </Button>
+
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-xs text-zinc-400 hover:text-zinc-100 ml-1"
+          onClick={handleViewDetails}
+          title="View details"
+        >
+          Details
+          <ChevronRight className="h-3.5 w-3.5 ml-1" />
         </Button>
       </div>
     </motion.div>

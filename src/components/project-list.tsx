@@ -17,6 +17,7 @@ interface ProjectListProps {
   onStart: (id: string) => Promise<void>;
   onStop: (id: string) => Promise<void>;
   onViewLogs: (id: string) => void;
+  onViewDetails: (id: string) => void;
   onClearCache: (id: string) => Promise<void>;
   onDeleteLock: (id: string) => Promise<void>;
 }
@@ -28,6 +29,7 @@ export function ProjectList({
   onStart,
   onStop,
   onViewLogs,
+  onViewDetails,
   onClearCache,
   onDeleteLock,
 }: ProjectListProps) {
@@ -90,7 +92,7 @@ export function ProjectList({
   return (
     <motion.div className="flex flex-col" layout>
       {/* Header row - matches grid-cols from ProjectRow */}
-      <div className="grid grid-cols-[24px_1fr_80px_64px_200px] items-center gap-4 px-4 py-2 border-b border-zinc-700 bg-zinc-900/50 text-xs text-zinc-500 uppercase tracking-wider sticky top-0">
+      <div className="grid grid-cols-[24px_1fr_80px_64px_260px] items-center gap-4 px-4 py-2 border-b border-zinc-700 bg-zinc-900/50 text-xs text-zinc-500 uppercase tracking-wider sticky top-0">
         <SortHeader field="status" current={sortField} direction={sortDirection} onSort={handleSort} center>
           Status
         </SortHeader>
@@ -116,6 +118,7 @@ export function ProjectList({
           onStart={onStart}
           onStop={onStop}
           onViewLogs={onViewLogs}
+          onViewDetails={onViewDetails}
           onClearCache={onClearCache}
           onDeleteLock={onDeleteLock}
         />
