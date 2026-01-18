@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -26,6 +26,9 @@ import {
   ArrowDown,
   ArrowUp,
   AlertCircle,
+  Triangle,
+  Rocket,
+  Link,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Project } from '@/lib/types';
@@ -81,6 +84,22 @@ interface ProjectInfo {
   description?: string;
   nodeVersion?: string;
   packageManager: string;
+  scripts: Record<string, string>;
+}
+
+interface VercelInfo {
+  isVercelProject: boolean;
+  isLinked: boolean;
+  projectInfo: {
+    projectId: string;
+    orgId: string;
+  } | null;
+  latestDeployment: {
+    url: string;
+    state: string;
+    created: string;
+    target?: string;
+  } | null;
 }
 
 export function ProjectDetail({
@@ -99,8 +118,30 @@ export function ProjectDetail({
   const [gitInfo, setGitInfo] = useState<GitInfo | null>(null);
   const [gitLoading, setGitLoading] = useState<string | null>(null);
   const [projectInfo, setProjectInfo] = useState<ProjectInfo | null>(null);
+  const [vercelInfo, setVercelInfo] = useState<VercelInfo | null>(null);
+  const [vercelDeploying, setVercelDeploying] = useState<string | null>(null);
+  const [showStartMenu, setShowStartMenu] = useState(false);
+  const [startMode, setStartMode] = useState<'dev' | 'prod' | null>(null);
+  const startMenuRef = useRef<HTMLDivElement>(null);
 
   const isRunning = project.status === 'running';
+
+  // Check if project supports production mode (has both build and start scripts)
+  const hasProdMode = projectInfo?.scripts?.build && projectInfo?.scripts?.start;
+
+  // Close start menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (startMenuRef.current && !startMenuRef.current.contains(event.target as Node)) {
+        setShowStartMenu(false);
+      }
+    };
+
+    if (showStartMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showStartMenu]);
 
   // Fetch metrics
   const fetchMetrics = useCallback(async () => {
@@ -141,24 +182,50 @@ export function ProjectDetail({
     }
   }, [project.id]);
 
-  // Poll metrics every 5 seconds when running, fetch git/project info on mount
+  // Fetch Vercel info
+  const fetchVercelInfo = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/projects/${project.id}/vercel`);
+      if (res.ok) {
+        const data = await res.json();
+        setVercelInfo(data);
+      }
+    } catch {
+      // Silently fail - Vercel info is optional
+    }
+  }, [project.id]);
+
+  // Poll metrics every 5 seconds when running, fetch git/project/vercel info on mount
   useEffect(() => {
     fetchMetrics();
     fetchGitInfo();
     fetchProjectInfo();
+    fetchVercelInfo();
     if (isRunning) {
       const interval = setInterval(fetchMetrics, 5000);
       return () => clearInterval(interval);
     }
-  }, [isRunning, fetchMetrics, fetchGitInfo, fetchProjectInfo]);
+  }, [isRunning, fetchMetrics, fetchGitInfo, fetchProjectInfo, fetchVercelInfo]);
 
-  const handleStart = async () => {
+  const handleStart = async (mode: 'dev' | 'prod' = 'dev') => {
     setIsToggling(true);
+    setStartMode(mode);
+    setShowStartMenu(false);
     try {
-      await onStart(project.id);
+      // Call API directly to support mode parameter
+      const res = await fetch(`/api/projects/${project.id}/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        console.error('Start failed:', data.error);
+      }
       onRefresh();
     } finally {
       setIsToggling(false);
+      setStartMode(null);
     }
   };
 
@@ -246,6 +313,25 @@ export function ProjectDetail({
     // This would need a backend endpoint to open file manager
     // For now, copy path to clipboard
     navigator.clipboard.writeText(project.path);
+  };
+
+  const handleVercelDeploy = async (production: boolean) => {
+    const deployType = production ? 'prod' : 'preview';
+    setVercelDeploying(deployType);
+    try {
+      const res = await fetch(`/api/projects/${project.id}/vercel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ production }),
+      });
+      if (res.ok) {
+        await fetchVercelInfo();
+      }
+    } catch {
+      // Silently fail
+    } finally {
+      setVercelDeploying(null);
+    }
   };
 
   // Format uptime
@@ -412,6 +498,94 @@ export function ProjectDetail({
             </div>
           )}
 
+          {/* Vercel Row - only show if it's a Vercel project */}
+          {vercelInfo?.isVercelProject && (
+            <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <Triangle className="h-4 w-4 text-zinc-500" fill="currentColor" />
+                  <span className="text-sm font-medium text-zinc-200">Vercel</span>
+                </div>
+
+                {vercelInfo.isLinked ? (
+                  <Badge variant="outline" className="text-xs border-green-500/50 text-green-400">
+                    <Link className="h-3 w-3 mr-1" />
+                    Linked
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-xs border-yellow-500/50 text-yellow-400">
+                    Not linked
+                  </Badge>
+                )}
+
+                {vercelInfo.latestDeployment && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className={cn(
+                      'px-1.5 py-0.5 rounded text-[10px] uppercase font-medium',
+                      vercelInfo.latestDeployment.state === 'READY'
+                        ? 'bg-green-500/20 text-green-400'
+                        : vercelInfo.latestDeployment.state === 'ERROR'
+                        ? 'bg-red-500/20 text-red-400'
+                        : 'bg-yellow-500/20 text-yellow-400'
+                    )}>
+                      {vercelInfo.latestDeployment.state}
+                    </span>
+                    {vercelInfo.latestDeployment.target && (
+                      <span className="text-zinc-500">
+                        ({vercelInfo.latestDeployment.target})
+                      </span>
+                    )}
+                    {vercelInfo.latestDeployment.url && (
+                      <a
+                        href={`https://${vercelInfo.latestDeployment.url}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-purple-400 hover:text-purple-300 font-mono truncate max-w-[200px]"
+                      >
+                        {vercelInfo.latestDeployment.url}
+                      </a>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 text-xs text-zinc-400 hover:text-zinc-100"
+                  onClick={() => handleVercelDeploy(false)}
+                  disabled={vercelDeploying !== null}
+                  title="Deploy preview"
+                >
+                  <Rocket className={cn('h-3.5 w-3.5 mr-1', vercelDeploying === 'preview' && 'animate-pulse')} />
+                  Preview
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs border-zinc-700 hover:bg-zinc-800"
+                  onClick={() => handleVercelDeploy(true)}
+                  disabled={vercelDeploying !== null}
+                  title="Deploy to production"
+                >
+                  <Rocket className={cn('h-3.5 w-3.5 mr-1', vercelDeploying === 'prod' && 'animate-pulse')} />
+                  Production
+                </Button>
+
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 text-xs text-zinc-400 hover:text-zinc-100"
+                  onClick={fetchVercelInfo}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          )}
+
           {/* Metrics Bar */}
           <div className="flex items-center gap-6 pb-4 border-b border-zinc-800">
             <MetricItem
@@ -451,20 +625,60 @@ export function ProjectDetail({
           <div className="flex items-center justify-between">
             {/* Primary Actions */}
             <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                className={cn(
-                  'h-9 text-xs',
-                  isRunning
-                    ? 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
-                    : 'bg-green-600 hover:bg-green-700 text-white'
+              {/* Start Button with optional dropdown for prod mode */}
+              <div className="relative" ref={startMenuRef}>
+                <div className="flex">
+                  <Button
+                    size="sm"
+                    className={cn(
+                      'h-9 text-xs',
+                      hasProdMode ? 'rounded-r-none' : '',
+                      isRunning
+                        ? 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
+                        : 'bg-green-600 hover:bg-green-700 text-white'
+                    )}
+                    onClick={() => handleStart('dev')}
+                    disabled={isToggling || isRestarting || isRunning}
+                  >
+                    <Play className={cn('h-3.5 w-3.5 mr-1.5', startMode === 'dev' && 'animate-pulse')} />
+                    {startMode === 'dev' ? 'Starting...' : 'Start Dev'}
+                  </Button>
+                  {hasProdMode && (
+                    <Button
+                      size="sm"
+                      className={cn(
+                        'h-9 px-2 rounded-l-none border-l border-green-700',
+                        isRunning
+                          ? 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
+                          : 'bg-green-600 hover:bg-green-700 text-white'
+                      )}
+                      onClick={() => setShowStartMenu(!showStartMenu)}
+                      disabled={isToggling || isRestarting || isRunning}
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                </div>
+                {/* Dropdown menu */}
+                {showStartMenu && !isRunning && (
+                  <div className="absolute top-full left-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-md shadow-lg z-10 min-w-[140px]">
+                    <button
+                      className="w-full px-3 py-2 text-left text-xs text-zinc-300 hover:bg-zinc-700 flex items-center gap-2"
+                      onClick={() => { setShowStartMenu(false); handleStart('dev'); }}
+                    >
+                      <Play className="h-3 w-3" />
+                      Start Dev
+                    </button>
+                    <button
+                      className="w-full px-3 py-2 text-left text-xs text-zinc-300 hover:bg-zinc-700 flex items-center gap-2 border-t border-zinc-700"
+                      onClick={() => { setShowStartMenu(false); handleStart('prod'); }}
+                    >
+                      <Rocket className="h-3 w-3" />
+                      Start Prod
+                    </button>
+                  </div>
                 )}
-                onClick={handleStart}
-                disabled={isToggling || isRestarting || isRunning}
-              >
-                <Play className="h-3.5 w-3.5 mr-1.5" />
-                Start
-              </Button>
+              </div>
 
               <Button
                 size="sm"

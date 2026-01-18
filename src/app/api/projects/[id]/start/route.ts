@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProject } from '@/lib/config';
-import { startProject } from '@/lib/process-manager';
+import { startProject, StartMode } from '@/lib/process-manager';
 import { checkPort } from '@/lib/port-checker';
 
 export async function POST(
@@ -18,6 +18,10 @@ export async function POST(
       );
     }
 
+    // Parse request body for mode
+    const body = await request.json().catch(() => ({}));
+    const mode: StartMode = body.mode === 'prod' ? 'prod' : 'dev';
+
     // Check if already running
     const isRunning = await checkPort(project.port);
     if (isRunning) {
@@ -27,7 +31,7 @@ export async function POST(
       );
     }
 
-    const result = startProject(project);
+    const result = startProject(project, mode);
 
     if (!result.success) {
       return NextResponse.json(
@@ -36,9 +40,11 @@ export async function POST(
       );
     }
 
+    const modeLabel = mode === 'prod' ? 'production' : 'development';
     return NextResponse.json({
       success: true,
-      message: `Starting ${project.name} on port ${project.port}`,
+      message: `Starting ${project.name} in ${modeLabel} mode on port ${project.port}`,
+      mode,
     });
   } catch (error) {
     console.error('Error starting project:', error);

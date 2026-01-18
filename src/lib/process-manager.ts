@@ -38,7 +38,12 @@ function addLogEntry(projectId: string, type: 'stdout' | 'stderr', message: stri
   }
 }
 
-export function startProject(project: ProjectConfig): { success: boolean; error?: string } {
+export type StartMode = 'dev' | 'prod';
+
+export function startProject(
+  project: ProjectConfig,
+  mode: StartMode = 'dev'
+): { success: boolean; error?: string } {
   if (activeProcesses.has(project.id)) {
     return { success: false, error: 'Project is already running' };
   }
@@ -48,11 +53,48 @@ export function startProject(project: ProjectConfig): { success: boolean; error?
     ensureLogsDir();
     const logFile = getLogFilePath(project.id);
     const startTime = new Date().toISOString();
-    writeFileSync(logFile, `${startTime} [SYS] === Starting ${project.name} ===\n`);
+    const modeLabel = mode === 'prod' ? 'PRODUCTION' : 'DEVELOPMENT';
+    writeFileSync(logFile, `${startTime} [SYS] === Starting ${project.name} (${modeLabel}) ===\n`);
 
-    // Parse the dev command - shell: true is intentional for npm/pnpm scripts
+    // For production mode, run build first if available
+    if (mode === 'prod') {
+      if (!project.scripts.build) {
+        return { success: false, error: 'No build script defined for production mode' };
+      }
+      if (!project.scripts.start) {
+        return { success: false, error: 'No start script defined for production mode' };
+      }
+
+      // Run build synchronously
+      addLogEntry(project.id, 'stdout', '=== Running build... ===');
+      try {
+        const [buildCmd, ...buildArgs] = project.scripts.build.split(' ');
+        execFileSync(buildCmd, buildArgs, {
+          cwd: project.path,
+          shell: true,
+          stdio: 'pipe',
+          env: {
+            ...process.env,
+            NODE_ENV: 'production',
+          },
+        });
+        addLogEntry(project.id, 'stdout', '=== Build completed ===');
+      } catch (buildError) {
+        const msg = buildError instanceof Error ? buildError.message : 'Build failed';
+        addLogEntry(project.id, 'stderr', `Build failed: ${msg}`);
+        return { success: false, error: `Build failed: ${msg}` };
+      }
+    }
+
+    // Determine which script to run
+    const script = mode === 'prod' ? project.scripts.start : project.scripts.dev;
+    if (!script) {
+      return { success: false, error: `No ${mode} script defined` };
+    }
+
+    // Parse the command - shell: true is intentional for npm/pnpm scripts
     // Security note: project.scripts comes from local config file, not user input
-    const [cmd, ...args] = project.scripts.dev.split(' ');
+    const [cmd, ...args] = script.split(' ');
 
     const child = spawn(cmd, args, {
       cwd: project.path,
@@ -62,6 +104,7 @@ export function startProject(project: ProjectConfig): { success: boolean; error?
         ...process.env,
         PORT: project.port.toString(),
         FORCE_COLOR: '1',
+        NODE_ENV: mode === 'prod' ? 'production' : 'development',
       },
     });
 
