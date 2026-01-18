@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { RefreshCw, CheckCircle, Package, ShieldAlert } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
+import { RefreshCw, CheckCircle, Package, ShieldAlert, ArrowUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface PackageHealthSectionProps {
@@ -48,6 +49,10 @@ export function PackageHealthSection({ projectId, projectName, initialOutdatedCo
   const [auditing, setAuditing] = useState(false);
   const [checkingOutdated, setCheckingOutdated] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedPackages, setSelectedPackages] = useState<Set<string>>(new Set());
+  const [updating, setUpdating] = useState(false);
+  const [updateOutput, setUpdateOutput] = useState<string | null>(null);
+  const hasAutoChecked = useRef(false);
 
   const fetchHealth = async () => {
     setLoading(true);
@@ -101,9 +106,70 @@ export function PackageHealthSection({ projectId, projectName, initialOutdatedCo
     }
   };
 
+  const updateSelectedPackages = async () => {
+    if (selectedPackages.size === 0) return;
+    setUpdating(true);
+    setUpdateOutput(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ packages: Array.from(selectedPackages) }),
+      });
+      const data = await res.json();
+      setUpdateOutput(data.output || (data.success ? 'Update complete' : 'Update failed'));
+      if (data.success) {
+        setSelectedPackages(new Set());
+        // Refresh health data after update
+        await fetchHealth();
+      }
+    } catch (err) {
+      console.error('Failed to update packages:', err);
+      setUpdateOutput('Failed to update packages');
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const togglePackageSelection = (pkgName: string) => {
+    setSelectedPackages(prev => {
+      const next = new Set(prev);
+      if (next.has(pkgName)) {
+        next.delete(pkgName);
+      } else {
+        next.add(pkgName);
+      }
+      return next;
+    });
+  };
+
+  const selectAllOutdated = () => {
+    if (!health) return;
+    const outdated = [...health.dependencies, ...health.devDependencies]
+      .filter(d => d.isOutdated)
+      .map(d => d.name);
+    setSelectedPackages(new Set(outdated));
+  };
+
+  const clearSelection = () => {
+    setSelectedPackages(new Set());
+  };
+
   useEffect(() => {
     fetchHealth();
   }, [projectId]);
+
+  // Auto-check for outdated packages if dashboard shows outdated but we don't have the data
+  useEffect(() => {
+    if (health && initialOutdatedCount && initialOutdatedCount > 0 && !hasAutoChecked.current) {
+      const fetchedCount = [...health.dependencies, ...health.devDependencies].filter(d => d.isOutdated).length;
+      if (fetchedCount === 0 && !checkingOutdated) {
+        // Dashboard shows outdated packages but we don't have the details - auto-fetch
+        hasAutoChecked.current = true;
+        checkOutdated();
+      }
+    }
+  }, [health, initialOutdatedCount, checkingOutdated]);
 
   if (loading) {
     return <div className="text-zinc-500 text-sm">Loading package health...</div>;
@@ -203,13 +269,85 @@ export function PackageHealthSection({ projectId, projectName, initialOutdatedCo
         </div>
       )}
 
+      {/* Selection Actions */}
+      {outdatedCount > 0 && (
+        <div className="flex items-center justify-between bg-zinc-900/50 rounded px-3 py-2">
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-zinc-400">
+              {selectedPackages.size > 0
+                ? `${selectedPackages.size} selected`
+                : 'Select packages to update'}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs text-zinc-400"
+              onClick={selectAllOutdated}
+              disabled={updating}
+            >
+              Select All
+            </Button>
+            {selectedPackages.size > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs text-zinc-500"
+                onClick={clearSelection}
+                disabled={updating}
+              >
+                Clear
+              </Button>
+            )}
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className={cn(
+              'h-7 px-3 text-xs',
+              criticalVulns > 0
+                ? 'border-red-500/50 text-red-400 hover:bg-red-500/10'
+                : 'border-yellow-500/50 text-yellow-400 hover:bg-yellow-500/10'
+            )}
+            onClick={updateSelectedPackages}
+            disabled={updating || selectedPackages.size === 0}
+          >
+            <ArrowUp className={cn('h-3 w-3 mr-1', updating && 'animate-bounce')} />
+            {updating ? 'Updating...' : `Update ${selectedPackages.size > 0 ? selectedPackages.size : ''} to Latest`}
+          </Button>
+        </div>
+      )}
+
+      {/* Update Output */}
+      {updateOutput && (
+        <div className="bg-zinc-950 border border-zinc-800 rounded p-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Update Output</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 px-2 text-xs text-zinc-500"
+              onClick={() => setUpdateOutput(null)}
+            >
+              Dismiss
+            </Button>
+          </div>
+          <pre className="text-xs font-mono text-zinc-300 whitespace-pre-wrap max-h-40 overflow-auto">
+            {updateOutput}
+          </pre>
+        </div>
+      )}
+
       {/* Dependencies */}
       <div className="space-y-2">
         <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wider">
           Dependencies ({health.dependencies.length})
         </h4>
         <div className="max-h-48 overflow-auto">
-          <DependencyList deps={health.dependencies} />
+          <DependencyList
+            deps={health.dependencies}
+            selectedPackages={selectedPackages}
+            onToggleSelect={togglePackageSelection}
+          />
         </div>
       </div>
 
@@ -220,7 +358,11 @@ export function PackageHealthSection({ projectId, projectName, initialOutdatedCo
             Dev Dependencies ({health.devDependencies.length})
           </h4>
           <div className="max-h-48 overflow-auto">
-            <DependencyList deps={health.devDependencies} />
+            <DependencyList
+              deps={health.devDependencies}
+              selectedPackages={selectedPackages}
+              onToggleSelect={togglePackageSelection}
+            />
           </div>
         </div>
       )}
@@ -228,7 +370,13 @@ export function PackageHealthSection({ projectId, projectName, initialOutdatedCo
   );
 }
 
-function DependencyList({ deps }: { deps: Dependency[] }) {
+interface DependencyListProps {
+  deps: Dependency[];
+  selectedPackages: Set<string>;
+  onToggleSelect: (name: string) => void;
+}
+
+function DependencyList({ deps, selectedPackages, onToggleSelect }: DependencyListProps) {
   if (deps.length === 0) {
     return <p className="text-zinc-500 text-sm">No dependencies</p>;
   }
@@ -238,11 +386,36 @@ function DependencyList({ deps }: { deps: Dependency[] }) {
       {deps.map((dep) => (
         <div
           key={dep.name}
-          className="flex items-center justify-between py-1.5 px-3 bg-zinc-900 rounded text-sm"
+          className={cn(
+            'flex items-center justify-between py-1.5 px-3 rounded text-sm',
+            dep.isOutdated
+              ? 'bg-yellow-500/10 border border-yellow-500/20 cursor-pointer hover:bg-yellow-500/20'
+              : 'bg-zinc-900',
+            selectedPackages.has(dep.name) && 'bg-yellow-500/20 border-yellow-500/40'
+          )}
+          onClick={() => dep.isOutdated && onToggleSelect(dep.name)}
         >
-          <span className="font-mono text-zinc-300">{dep.name}</span>
           <div className="flex items-center gap-2">
-            <span className="font-mono text-zinc-500">{dep.current}</span>
+            {dep.isOutdated && (
+              <Checkbox
+                checked={selectedPackages.has(dep.name)}
+                onCheckedChange={() => onToggleSelect(dep.name)}
+              />
+            )}
+            <span className={cn(
+              'font-mono',
+              dep.isOutdated ? 'text-yellow-300' : 'text-zinc-300'
+            )}>
+              {dep.name}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={cn(
+              'font-mono',
+              dep.isOutdated ? 'text-yellow-500/70' : 'text-zinc-500'
+            )}>
+              {dep.current}
+            </span>
             {dep.isOutdated && dep.latest && (
               <>
                 <span className="text-zinc-600">→</span>

@@ -7,12 +7,19 @@ import { join } from 'path';
 
 const execAsync = promisify(exec);
 
+interface UpdateRequestBody {
+  packages?: string[]; // Specific packages to update to latest
+}
+
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
+    const body: UpdateRequestBody = await request.json().catch(() => ({}));
+    const packages = body.packages || [];
+
     const project = getProject(id);
 
     if (!project) {
@@ -37,28 +44,71 @@ export async function POST(
       });
     }
 
-    // Determine package manager and run update
-    let cmd: string;
+    // Determine package manager
     let packageManager: string;
-
     if (hasPnpmLock) {
-      cmd = 'pnpm update';
       packageManager = 'pnpm';
     } else if (hasNpmLock) {
-      cmd = 'npm update';
       packageManager = 'npm';
     } else {
-      cmd = 'yarn upgrade';
       packageManager = 'yarn';
     }
 
-    // Run the update command
-    const { stdout, stderr } = await execAsync(cmd, {
-      cwd,
-      timeout: 120000, // 2 minute timeout for updates
-    });
+    let output = '';
 
-    const output = stdout + (stderr ? `\n${stderr}` : '');
+    if (packages.length > 0) {
+      // Update specific packages to latest
+      output = `Updating ${packages.length} package(s) to latest versions...\n\n`;
+
+      for (const pkg of packages) {
+        // Sanitize package name to prevent command injection
+        if (!/^[@a-z0-9][\w\-./]*$/i.test(pkg)) {
+          output += `Skipping invalid package name: ${pkg}\n`;
+          continue;
+        }
+
+        let installCmd: string;
+        if (packageManager === 'pnpm') {
+          installCmd = `pnpm add ${pkg}@latest`;
+        } else if (packageManager === 'npm') {
+          installCmd = `npm install ${pkg}@latest`;
+        } else {
+          installCmd = `yarn add ${pkg}@latest`;
+        }
+
+        try {
+          output += `$ ${installCmd}\n`;
+          const { stdout, stderr } = await execAsync(installCmd, {
+            cwd,
+            timeout: 60000,
+          });
+          output += stdout + (stderr ? stderr : '') + '\n';
+        } catch (err) {
+          const execErr = err as { stdout?: string; stderr?: string; message?: string };
+          output += `Error: ${execErr.message || 'Failed'}\n`;
+          output += execErr.stdout || '';
+          output += execErr.stderr || '';
+          output += '\n';
+        }
+      }
+    } else {
+      // No packages specified - run standard update within semver range
+      let cmd: string;
+      if (packageManager === 'pnpm') {
+        cmd = 'pnpm update';
+      } else if (packageManager === 'npm') {
+        cmd = 'npm update';
+      } else {
+        cmd = 'yarn upgrade';
+      }
+
+      const { stdout, stderr } = await execAsync(cmd, {
+        cwd,
+        timeout: 120000,
+      });
+
+      output = stdout + (stderr ? `\n${stderr}` : '');
+    }
 
     return NextResponse.json({
       success: true,

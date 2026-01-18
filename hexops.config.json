@@ -167,6 +167,18 @@
         "dev": "pnpm dev",
         "build": "pnpm build"
       }
+    },
+    {
+      "id": "promo-tracker",
+      "name": "Promo Tracker",
+      "description": "Field rep promotional tracking app",
+      "path": "/home/aaron/Projects/promo-tracker",
+      "port": 3130,
+      "category": "Client",
+      "scripts": {
+        "dev": "pnpm dev",
+        "build": "pnpm build"
+      }
     }
   ],
   "categories": ["Product", "Client", "Internal", "Personal"]
