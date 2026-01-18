@@ -1,11 +1,25 @@
 # HexOps Development Notes
 
-**Current Version:** 0.2.0
+**Current Version:** 0.3.0
 **Purpose:** Internal development operations dashboard for managing Hexaxia project dev servers. Start/stop projects, view logs, clear caches, and monitor status from a single interface.
 
 ---
 
 ## Version History
+
+### v0.3.0 (2026-01-18)
+- **Project Detail Page** - cPanel-style control panel for individual projects
+- **Control Panel** with sections:
+  - Project info (description, version, category, package manager, node version)
+  - Git status and controls (branch, pull, push, dirty indicator)
+  - Vercel integration (detect linked projects, deploy preview/production)
+  - Performance metrics (uptime, memory, CPU, port status, PID)
+  - Dual start mode (dev/prod) with dropdown when build+start scripts exist
+  - Utility actions (IDE, Terminal, Files, Browser)
+  - Cache tools (Clear .next, Delete Lock)
+- **Collapsible sections**: Logs, Project Info, Git, Package Health
+- Metrics now detect PID from port using `ss` command for externally started processes
+- Added PRD document with feature roadmap
 
 ### v0.2.0 (2026-01-18)
 - Refactored from card grid layout to row-based list layout
@@ -27,6 +41,32 @@
 ---
 
 ## Recent Changes
+
+### Project Detail Page & Control Panel (v0.3.0)
+
+**Summary:** Added comprehensive project detail page with cPanel-style control panel. Consolidates all project management actions and status info in one view.
+
+| File | Change |
+|------|--------|
+| `src/components/project-detail.tsx` | New - Main detail page with control panel |
+| `src/components/detail-sections/*.tsx` | New - Collapsible sections (logs, info, git, health) |
+| `src/app/api/projects/[id]/info/route.ts` | New - Package.json info endpoint |
+| `src/app/api/projects/[id]/git/route.ts` | New - Git status endpoint |
+| `src/app/api/projects/[id]/git-pull/route.ts` | New - Git pull action |
+| `src/app/api/projects/[id]/git-push/route.ts` | New - Git push action |
+| `src/app/api/projects/[id]/metrics/route.ts` | New - Process metrics with PID detection |
+| `src/app/api/projects/[id]/vercel/route.ts` | New - Vercel status and deploy |
+| `src/lib/process-manager.ts` | Added StartMode, production build support |
+| `src/lib/types.ts` | Added description field to ProjectConfig |
+| `docs/PRD.md` | New - Product requirements and roadmap |
+
+**Key Insights:**
+- Use `ss -tlnp sport = :PORT` to detect PID from port (works without sudo, unlike lsof)
+- Production mode runs build synchronously before spawning start script
+- Vercel CLI integration via `vercel ls --json` and `vercel --prod --yes`
+- Dropdown menus need click-outside handlers via useRef + useEffect
+
+---
 
 ### Row Layout & Right Sidebar (v0.2.0)
 
@@ -87,11 +127,20 @@ page.tsx
 | Route | Method | Purpose |
 |-------|--------|---------|
 | `/api/projects` | GET | List all projects with status |
-| `/api/projects/[id]/start` | POST | Start dev server |
+| `/api/projects/[id]/start` | POST | Start dev server (accepts `mode: 'dev' \| 'prod'`) |
 | `/api/projects/[id]/stop` | POST | Stop dev server |
 | `/api/projects/[id]/logs` | GET | Get recent log entries |
 | `/api/projects/[id]/clear-cache` | POST | Delete .next directory |
 | `/api/projects/[id]/delete-lock` | POST | Remove lock files |
+| `/api/projects/[id]/info` | GET | Package.json info, node version, package manager |
+| `/api/projects/[id]/git` | GET | Git status (branch, dirty, last commit) |
+| `/api/projects/[id]/git-pull` | POST | Execute git pull |
+| `/api/projects/[id]/git-push` | POST | Execute git push |
+| `/api/projects/[id]/metrics` | GET | Process metrics (PID, uptime, memory, CPU, port) |
+| `/api/projects/[id]/vercel` | GET | Vercel project status and latest deployment |
+| `/api/projects/[id]/vercel` | POST | Deploy to Vercel (accepts `production: boolean`) |
+| `/api/projects/[id]/outdated` | GET | Run pnpm outdated |
+| `/api/projects/[id]/audit` | GET | Run pnpm audit |
 
 ### Process Management
 
@@ -178,9 +227,13 @@ page.tsx
 ## Future Considerations
 
 - [ ] Project health checks (ping endpoints)
-- [ ] Dependency vulnerability scanning
+- [x] Dependency vulnerability scanning (pnpm audit integration added)
 - [ ] Batch operations (start all, stop all)
-- [ ] Project details panel in right sidebar
-- [ ] Git status integration
-- [ ] Build/deploy triggers
+- [x] Project details panel (full detail page with control panel)
+- [x] Git status integration (branch, dirty, pull/push)
+- [x] Build/deploy triggers (Vercel deploy, dual start mode)
 - [ ] Keyboard shortcuts (j/k navigation, Enter to start)
+- [ ] Toast notifications for async operations
+- [ ] Confirmation dialogs for destructive actions
+- [ ] Log filtering and search
+- [ ] Environment variable viewer
