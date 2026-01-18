@@ -4,11 +4,22 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import {
+  addPatchHistoryEntry,
+  generatePatchId,
+  invalidateProjectCache,
+} from '@/lib/patch-storage';
+import { getUpdateType } from '@/lib/patch-scanner';
+import type { PatchHistoryEntry } from '@/lib/types';
 
 const execAsync = promisify(exec);
 
 interface UpdateRequestBody {
-  packages?: string[]; // Specific packages to update to latest
+  packages?: Array<{
+    name: string;
+    fromVersion?: string;
+    toVersion: string;
+  }>;
 }
 
 export async function POST(
@@ -40,7 +51,7 @@ export async function POST(
       return NextResponse.json({
         success: false,
         error: 'No lockfile found. Run install first.',
-        output: `No lockfile found in ${cwd}\n\nRun one of these commands first:\n  pnpm install\n  npm install\n  yarn install`,
+        output: `No lockfile found in ${cwd}`,
       });
     }
 
@@ -54,41 +65,95 @@ export async function POST(
       packageManager = 'yarn';
     }
 
-    let output = '';
+    const results: Array<{
+      package: string;
+      success: boolean;
+      output: string;
+      error?: string;
+    }> = [];
 
     if (packages.length > 0) {
-      // Update specific packages to latest
-      output = `Updating ${packages.length} package(s) to latest versions...\n\n`;
-
+      // Update specific packages
       for (const pkg of packages) {
-        // Sanitize package name to prevent command injection
-        if (!/^[@a-z0-9][\w\-./]*$/i.test(pkg)) {
-          output += `Skipping invalid package name: ${pkg}\n`;
+        // Sanitize package name
+        if (!/^[@a-z0-9][\w\-./@]*$/i.test(pkg.name)) {
+          results.push({
+            package: pkg.name,
+            success: false,
+            output: '',
+            error: 'Invalid package name',
+          });
           continue;
         }
 
         let installCmd: string;
+        const targetVersion = pkg.toVersion || 'latest';
         if (packageManager === 'pnpm') {
-          installCmd = `pnpm add ${pkg}@latest`;
+          installCmd = `pnpm add ${pkg.name}@${targetVersion}`;
         } else if (packageManager === 'npm') {
-          installCmd = `npm install ${pkg}@latest`;
+          installCmd = `npm install ${pkg.name}@${targetVersion}`;
         } else {
-          installCmd = `yarn add ${pkg}@latest`;
+          installCmd = `yarn add ${pkg.name}@${targetVersion}`;
         }
 
         try {
-          output += `$ ${installCmd}\n`;
           const { stdout, stderr } = await execAsync(installCmd, {
             cwd,
             timeout: 60000,
           });
-          output += stdout + (stderr ? stderr : '') + '\n';
+          const output = `$ ${installCmd}\n${stdout}${stderr ? stderr : ''}`;
+
+          results.push({
+            package: pkg.name,
+            success: true,
+            output,
+          });
+
+          // Log to history
+          const historyEntry: PatchHistoryEntry = {
+            id: generatePatchId(),
+            timestamp: new Date().toISOString(),
+            projectId: id,
+            package: pkg.name,
+            fromVersion: pkg.fromVersion || 'unknown',
+            toVersion: targetVersion,
+            updateType: pkg.fromVersion
+              ? getUpdateType(pkg.fromVersion, targetVersion)
+              : 'patch',
+            trigger: 'manual',
+            success: true,
+            output,
+          };
+          addPatchHistoryEntry(historyEntry);
         } catch (err) {
           const execErr = err as { stdout?: string; stderr?: string; message?: string };
-          output += `Error: ${execErr.message || 'Failed'}\n`;
-          output += execErr.stdout || '';
-          output += execErr.stderr || '';
-          output += '\n';
+          const output = `$ ${installCmd}\n${execErr.stdout || ''}${execErr.stderr || ''}`;
+          const error = execErr.message || 'Update failed';
+
+          results.push({
+            package: pkg.name,
+            success: false,
+            output,
+            error,
+          });
+
+          // Log failure to history
+          const historyEntry: PatchHistoryEntry = {
+            id: generatePatchId(),
+            timestamp: new Date().toISOString(),
+            projectId: id,
+            package: pkg.name,
+            fromVersion: pkg.fromVersion || 'unknown',
+            toVersion: targetVersion,
+            updateType: pkg.fromVersion
+              ? getUpdateType(pkg.fromVersion, targetVersion)
+              : 'patch',
+            trigger: 'manual',
+            success: false,
+            output,
+            error,
+          };
+          addPatchHistoryEntry(historyEntry);
         }
       }
     } else {
@@ -107,12 +172,23 @@ export async function POST(
         timeout: 120000,
       });
 
-      output = stdout + (stderr ? `\n${stderr}` : '');
+      results.push({
+        package: '*',
+        success: true,
+        output: stdout + (stderr ? `\n${stderr}` : ''),
+      });
     }
 
+    // Invalidate cache for this project
+    invalidateProjectCache(id);
+
+    const allSucceeded = results.every(r => r.success);
+    const output = results.map(r => r.output).join('\n\n');
+
     return NextResponse.json({
-      success: true,
+      success: allSucceeded,
       packageManager,
+      results,
       output: output || 'Packages updated successfully.',
     });
   } catch (error) {
