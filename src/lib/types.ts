@@ -12,8 +12,24 @@ export interface ProjectConfig {
   };
 }
 
+export interface ProjectExtendedStatus {
+  git?: {
+    branch: string;
+    dirty: boolean;
+  };
+  packages?: {
+    outdatedCount: number;
+  };
+  metrics?: {
+    uptime: number; // milliseconds
+    memory: number; // MB
+    pid: number;
+  };
+}
+
 export interface Project extends ProjectConfig {
   status: 'running' | 'stopped' | 'unknown';
+  extended?: ProjectExtendedStatus;
 }
 
 export interface HexOpsConfig {

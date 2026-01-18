@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getProjects, getCategories } from '@/lib/config';
 import { checkPorts } from '@/lib/port-checker';
+import { getExtendedStatusBatch } from '@/lib/extended-status';
 import type { Project } from '@/lib/types';
 
 export async function GET() {
@@ -12,10 +13,21 @@ export async function GET() {
     const ports = projectConfigs.map((p) => p.port);
     const portStatus = await checkPorts(ports);
 
-    // Combine config with status
+    // Build list for extended status fetch
+    const projectsWithStatus = projectConfigs.map((config) => ({
+      config,
+      isRunning: portStatus.get(config.port) ?? false,
+    }));
+
+    // Fetch extended status for all projects in parallel
+    // Skip package checks (slow) - they're cached and can be fetched separately
+    const extendedStatus = await getExtendedStatusBatch(projectsWithStatus, false);
+
+    // Combine config with status and extended info
     const projects: Project[] = projectConfigs.map((config) => ({
       ...config,
       status: portStatus.get(config.port) ? 'running' : 'stopped',
+      extended: extendedStatus.get(config.id),
     }));
 
     return NextResponse.json({

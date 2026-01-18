@@ -92,19 +92,24 @@ export function ProjectList({
   return (
     <motion.div className="flex flex-col" layout>
       {/* Header row - matches grid-cols from ProjectRow */}
-      <div className="grid grid-cols-[48px_1fr_80px_64px_28px_28px_28px_28px_56px_72px] items-center gap-3 px-4 py-2 border-b border-zinc-700 bg-zinc-900/50 text-[10px] text-zinc-500 uppercase tracking-wider sticky top-0">
+      <div className="grid grid-cols-[24px_140px_1fr_90px_40px_70px_55px_55px_45px_28px_28px_28px_28px_56px_72px] items-center gap-2 px-4 py-2 border-b border-zinc-700 bg-zinc-900/50 text-[10px] text-zinc-500 uppercase tracking-wider sticky top-0">
         <SortHeader field="status" current={sortField} direction={sortDirection} onSort={handleSort} center>
           STATUS
         </SortHeader>
         <SortHeader field="name" current={sortField} direction={sortDirection} onSort={handleSort}>
           NAME
         </SortHeader>
+        <div>DESC</div>
+        <div className="text-center" title="Git branch">GIT</div>
+        <div className="text-center" title="Outdated packages">PKGS</div>
         <SortHeader field="category" current={sortField} direction={sortDirection} onSort={handleSort} center>
           CATEGORY
         </SortHeader>
         <SortHeader field="port" current={sortField} direction={sortDirection} onSort={handleSort} center>
           PORT
         </SortHeader>
+        <div className="text-center" title="Process uptime">UPTIME</div>
+        <div className="text-center" title="Memory usage">MEM</div>
         <div className="text-center" title="Open in browser">OPEN</div>
         <div className="text-center" title="View logs">LOGS</div>
         <div className="text-center" title="Clear cache">CACHE</div>
