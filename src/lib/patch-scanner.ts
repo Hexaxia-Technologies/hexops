@@ -93,17 +93,34 @@ export async function scanOutdated(
         });
       }
     }
-    // npm format (object)
+    // npm format (object, or object with arrays for workspaces)
     else if (typeof data === 'object') {
       for (const [name, info] of Object.entries(data)) {
-        const pkg = info as { current: string; wanted: string; latest: string };
-        result.push({
-          name,
-          current: pkg.current,
-          wanted: pkg.wanted,
-          latest: pkg.latest,
-          type: 'dependencies', // npm doesn't distinguish in outdated output
-        });
+        // npm workspaces return an array of entries for each package
+        // (one per workspace that has the dependency)
+        if (Array.isArray(info)) {
+          // Use the first entry - versions should be consistent across workspaces
+          const first = info[0] as { current: string; wanted: string; latest: string; type?: string };
+          if (first) {
+            result.push({
+              name,
+              current: first.current,
+              wanted: first.wanted,
+              latest: first.latest,
+              type: first.type === 'devDependencies' ? 'devDependencies' : 'dependencies',
+            });
+          }
+        } else {
+          // Standard npm format (single object per package)
+          const pkg = info as { current: string; wanted: string; latest: string; type?: string };
+          result.push({
+            name,
+            current: pkg.current,
+            wanted: pkg.wanted,
+            latest: pkg.latest,
+            type: pkg.type === 'devDependencies' ? 'devDependencies' : 'dependencies',
+          });
+        }
       }
     }
 
@@ -152,12 +169,17 @@ export async function scanVulnerabilities(
           findings: Array<{ paths: string[] }>;
           patched_versions: string;
         };
+        const depPath = adv.findings?.[0]?.paths?.[0] || adv.module_name;
+        const pathParts = depPath.split('>').map(s => s.trim());
         result.push({
           name: adv.module_name,
           severity: adv.severity as VulnSeverity,
           title: adv.title,
-          path: adv.findings?.[0]?.paths?.[0] || adv.module_name,
+          path: depPath,
           fixAvailable: adv.patched_versions !== '<0.0.0',
+          isDirect: pathParts.length === 1,
+          via: pathParts.length > 1 ? pathParts : undefined,
+          parentPackage: pathParts.length > 1 ? pathParts[0] : undefined,
         });
       }
     }
@@ -167,18 +189,62 @@ export async function scanVulnerabilities(
       for (const [name, info] of Object.entries(data.vulnerabilities)) {
         const vuln = info as {
           severity: string;
-          via: Array<{ title?: string }>;
-          fixAvailable: boolean | { name: string; version: string };
+          via: Array<string | { title?: string; source?: number }>;
+          fixAvailable: boolean | { name: string; version: string; isSemVerMajor?: boolean };
+          isDirect: boolean;
+          effects?: string[];
         };
+
+        // Extract title from via (can be string or object with title)
+        let title = 'Vulnerability';
+        const viaWithTitle = vuln.via?.find(v => typeof v === 'object' && v.title);
+        if (viaWithTitle && typeof viaWithTitle === 'object') {
+          title = viaWithTitle.title || title;
+        }
+
+        // Build dependency chain from via field
+        const viaChain = vuln.via?.filter(v => typeof v === 'string') as string[];
+
+        // Determine parent package (the direct dep that pulls in this transitive)
+        // For transitive deps, the parent is in the effects chain or via chain
+        let parentPackage: string | undefined;
+        if (!vuln.isDirect && viaChain?.length > 0) {
+          parentPackage = viaChain[0]; // First string in via is typically the parent
+        }
+
+        // Determine if fix is actually available and not destructive
+        // - isSemVerMajor means the fix requires a breaking change
+        // - If not a direct dependency and parent has the vuln, it's unfixable by user
+        let fixAvailable = !!vuln.fixAvailable;
+        let fixVersion: string | undefined;
+        let isBreakingFix = false;
+
+        if (typeof vuln.fixAvailable === 'object') {
+          fixVersion = vuln.fixAvailable.version;
+          isBreakingFix = vuln.fixAvailable.isSemVerMajor === true;
+          // If the fix requires a breaking change, mark as unfixable (requires careful review)
+          if (isBreakingFix) {
+            fixAvailable = false;
+          }
+        }
+
+        // Transitive deps where user can't directly fix are "unfixable"
+        if (!vuln.isDirect && parentPackage) {
+          // User can't directly fix transitive deps - parent package needs to update
+          fixAvailable = false;
+        }
+
         result.push({
           name,
           severity: vuln.severity as VulnSeverity,
-          title: vuln.via?.[0]?.title || 'Vulnerability',
+          title,
           path: name,
-          fixAvailable: !!vuln.fixAvailable,
-          fixVersion: typeof vuln.fixAvailable === 'object'
-            ? vuln.fixAvailable.version
-            : undefined,
+          fixAvailable,
+          fixVersion,
+          isDirect: vuln.isDirect ?? true,
+          via: viaChain?.length > 0 ? viaChain : undefined,
+          parentPackage,
+          parentAtLatest: isBreakingFix, // If breaking fix needed, parent is likely at latest
         });
       }
     }
@@ -228,11 +294,14 @@ export async function scanProject(
 
 /**
  * Build priority queue from multiple project caches
+ * Creates one entry per project per package (1:1 relationship)
  */
 export function buildPriorityQueue(
-  caches: ProjectPatchCache[]
+  caches: ProjectPatchCache[],
+  projectMap: Record<string, string> = {},  // id -> name mapping
+  holdsMap: Record<string, string[]> = {}   // id -> held package names
 ): { queue: PatchQueueItem[]; summary: PatchSummary } {
-  const packageMap = new Map<string, PatchQueueItem>();
+  const queue: PatchQueueItem[] = [];
   const summary: PatchSummary = {
     critical: 0,
     high: 0,
@@ -242,71 +311,67 @@ export function buildPriorityQueue(
     outdatedPatch: 0,
   };
 
-  // Process vulnerabilities first (higher priority)
+  // Process each cache (one per project)
   for (const cache of caches) {
+    const projectName = projectMap[cache.projectId] || cache.projectId;
+    const projectHolds = holdsMap[cache.projectId] || [];
+
+    // Process vulnerabilities (higher priority)
     for (const vuln of cache.vulnerabilities) {
-      const key = `vuln:${vuln.name}:${vuln.severity}`;
-      const existing = packageMap.get(key);
+      const isHeld = projectHolds.includes(vuln.name);
+      queue.push({
+        priority: getPriorityScore('vulnerability', vuln.severity),
+        type: 'vulnerability',
+        severity: vuln.severity,
+        package: vuln.name,
+        currentVersion: '',
+        targetVersion: vuln.fixVersion || '',
+        updateType: 'patch',
+        projectId: cache.projectId,
+        projectName,
+        title: vuln.title,
+        fixAvailable: vuln.fixAvailable,
+        isHeld,
+        // Transitive dependency info
+        isDirect: vuln.isDirect,
+        via: vuln.via,
+        parentPackage: vuln.parentPackage,
+        parentAtLatest: vuln.parentAtLatest,
+      });
 
-      if (existing) {
-        if (!existing.affectedProjects.includes(cache.projectId)) {
-          existing.affectedProjects.push(cache.projectId);
-        }
-      } else {
-        packageMap.set(key, {
-          priority: getPriorityScore('vulnerability', vuln.severity),
-          type: 'vulnerability',
-          severity: vuln.severity,
-          package: vuln.name,
-          currentVersion: '',
-          targetVersion: vuln.fixVersion || '',
-          updateType: 'patch',
-          affectedProjects: [cache.projectId],
-          title: vuln.title,
-          fixAvailable: vuln.fixAvailable,
-        });
-
-        // Update summary
-        if (vuln.severity === 'critical') summary.critical++;
-        else if (vuln.severity === 'high') summary.high++;
-        else if (vuln.severity === 'moderate') summary.moderate++;
-      }
+      // Update summary (counts all occurrences)
+      if (vuln.severity === 'critical') summary.critical++;
+      else if (vuln.severity === 'high') summary.high++;
+      else if (vuln.severity === 'moderate') summary.moderate++;
     }
 
     // Process outdated packages
     for (const pkg of cache.outdated) {
       const updateType = getUpdateType(pkg.current, pkg.latest);
-      const key = `outdated:${pkg.name}:${pkg.latest}`;
-      const existing = packageMap.get(key);
+      const isHeld = projectHolds.includes(pkg.name);
 
-      if (existing) {
-        if (!existing.affectedProjects.includes(cache.projectId)) {
-          existing.affectedProjects.push(cache.projectId);
-        }
-      } else {
-        packageMap.set(key, {
-          priority: getPriorityScore('outdated', updateType),
-          type: 'outdated',
-          severity: updateType,
-          package: pkg.name,
-          currentVersion: pkg.current,
-          targetVersion: pkg.latest,
-          updateType,
-          affectedProjects: [cache.projectId],
-        });
+      queue.push({
+        priority: getPriorityScore('outdated', updateType),
+        type: 'outdated',
+        severity: updateType,
+        package: pkg.name,
+        currentVersion: pkg.current,
+        targetVersion: pkg.latest,
+        updateType,
+        projectId: cache.projectId,
+        projectName,
+        isHeld,
+      });
 
-        // Update summary
-        if (updateType === 'major') summary.outdatedMajor++;
-        else if (updateType === 'minor') summary.outdatedMinor++;
-        else summary.outdatedPatch++;
-      }
+      // Update summary (counts all occurrences)
+      if (updateType === 'major') summary.outdatedMajor++;
+      else if (updateType === 'minor') summary.outdatedMinor++;
+      else summary.outdatedPatch++;
     }
   }
 
   // Sort by priority (lower number = higher priority)
-  const queue = Array.from(packageMap.values()).sort(
-    (a, b) => a.priority - b.priority
-  );
+  queue.sort((a, b) => a.priority - b.priority);
 
   return { queue, summary };
 }

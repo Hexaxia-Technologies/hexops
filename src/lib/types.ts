@@ -10,6 +10,7 @@ export interface ProjectConfig {
     build: string;
     [key: string]: string;
   };
+  holds?: string[];  // Package names on hold (excluded from updates)
 }
 
 export interface ProjectExtendedStatus {
@@ -71,9 +72,16 @@ export interface PatchQueueItem {
   currentVersion: string;
   targetVersion: string;
   updateType: UpdateType;
-  affectedProjects: string[];
-  title?: string; // For vulnerabilities
+  projectId: string;      // Single project (1:1 relationship)
+  projectName: string;    // For display
+  title?: string;         // For vulnerabilities
   fixAvailable?: boolean;
+  isHeld?: boolean;       // Package is on hold for this project
+  // Transitive dependency info (for unfixable vulnerabilities)
+  isDirect?: boolean;
+  via?: string[];
+  parentPackage?: string;
+  parentAtLatest?: boolean;
 }
 
 export interface PatchSummary {
@@ -130,6 +138,11 @@ export interface VulnerabilityInfo {
   path: string;
   fixAvailable: boolean;
   fixVersion?: string;
+  // Transitive dependency info
+  isDirect: boolean;            // Is this a direct dependency?
+  via?: string[];               // Dependency chain (e.g., ["@vercel/blob", "undici"])
+  parentPackage?: string;       // Direct parent package that needs updating
+  parentAtLatest?: boolean;     // Is the parent already at latest version?
 }
 
 export interface ProjectPatchCache {
