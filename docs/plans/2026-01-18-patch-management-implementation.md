@@ -1608,3 +1608,105 @@ At this point you should have:
 ---
 
 **Implementation continues in subsequent tasks. Complete Phase 1 and Phase 2 first, then proceed.**
+
+---
+
+## Post-Implementation: Bugs & Lessons Learned
+
+This section documents bugs discovered during implementation and the fixes applied.
+
+### Bug 1: TypeError in `getUpdateType` Function
+
+**Symptom:** API returned 500 error with "Failed to fetch patch data"
+
+**Root Cause:** The `getUpdateType` function crashed when version strings were `undefined`:
+```typescript
+TypeError: Cannot read properties of undefined (reading 'replace')
+```
+
+Different package managers (pnpm vs npm) return different JSON structures, and some fields can be missing or undefined.
+
+**Original Code:**
+```typescript
+export function getUpdateType(current: string, target: string): UpdateType {
+  const cleanCurrent = current.replace(/^[\^~]/, '');
+  // ...
+}
+```
+
+**Fix Applied:** Added null checks and NaN guards:
+```typescript
+export function getUpdateType(current: string | undefined, target: string | undefined): UpdateType {
+  if (!current || !target) return 'patch';
+
+  const cleanCurrent = current.replace(/^[\^~]/, '');
+  const cleanTarget = target.replace(/^[\^~]/, '');
+
+  const [currMajor, currMinor] = cleanCurrent.split('.').map(Number);
+  const [targMajor, targMinor] = cleanTarget.split('.').map(Number);
+
+  if (isNaN(currMajor) || isNaN(targMajor)) return 'patch';
+  if (targMajor > currMajor) return 'major';
+  if (isNaN(currMinor) || isNaN(targMinor)) return 'patch';
+  if (targMinor > currMinor) return 'minor';
+  return 'patch';
+}
+```
+
+**Lesson Learned:** When parsing output from external CLI tools (like `npm outdated`, `pnpm audit`), always handle missing or malformed data defensively. Different package managers have different output formats, and edge cases like missing versions are common.
+
+---
+
+### Bug 2: React Duplicate Key Error
+
+**Symptom:** Console warning: "Encountered two children with the same key, `vulnerability:validator:`"
+
+**Root Cause:** The React key generation used `targetVersion`, but vulnerabilities often have empty `targetVersion`. Multiple vulnerabilities for the same package with different severities generated identical keys:
+- `vulnerability:validator:` (high severity, empty targetVersion)
+- `vulnerability:validator:` (moderate severity, empty targetVersion)
+
+**Original Code:**
+```typescript
+const key = `${item.type}:${item.package}:${item.targetVersion}`;
+```
+
+**Fix Applied:** Include severity and fallback to index:
+```typescript
+filteredQueue.map((item, index) => {
+  const key = `${item.type}:${item.package}:${item.severity}:${item.targetVersion || index}`;
+```
+
+**Lesson Learned:** When generating React keys from data that may have empty/duplicate fields, always include enough differentiating attributes. Severity was the missing dimension here. Using index as a fallback ensures uniqueness even in edge cases.
+
+---
+
+### Debugging Technique: Verbose API Errors
+
+During debugging, temporarily enhanced the API error response to expose the actual error:
+
+```typescript
+return NextResponse.json(
+  {
+    error: 'Failed to fetch patch data',
+    details: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+  },
+  { status: 500 }
+);
+```
+
+This technique quickly revealed the root cause. Removed after fixing for production.
+
+---
+
+### Summary of Defensive Programming Patterns Applied
+
+1. **Null/undefined checks before string operations** - Check `if (!value)` before calling `.replace()`, `.split()`, etc.
+
+2. **NaN guards after Number parsing** - `parseInt`/`Number()` can return NaN; always check before comparisons
+
+3. **Unique keys with multiple attributes** - Include all differentiating fields in React keys
+
+4. **Fallback values for optional data** - Use `|| index` or `|| 'unknown'` for missing values
+
+5. **Graceful degradation** - Return safe defaults (`'patch'`) rather than throwing errors

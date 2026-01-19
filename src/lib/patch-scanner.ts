@@ -36,14 +36,18 @@ export function detectPackageManager(projectPath: string): PackageManager | null
 /**
  * Determine update type from version strings
  */
-export function getUpdateType(current: string, target: string): UpdateType {
+export function getUpdateType(current: string | undefined, target: string | undefined): UpdateType {
+  if (!current || !target) return 'patch';
+
   const cleanCurrent = current.replace(/^[\^~]/, '');
   const cleanTarget = target.replace(/^[\^~]/, '');
 
   const [currMajor, currMinor] = cleanCurrent.split('.').map(Number);
   const [targMajor, targMinor] = cleanTarget.split('.').map(Number);
 
+  if (isNaN(currMajor) || isNaN(targMajor)) return 'patch';
   if (targMajor > currMajor) return 'major';
+  if (isNaN(currMinor) || isNaN(targMinor)) return 'patch';
   if (targMinor > currMinor) return 'minor';
   return 'patch';
 }

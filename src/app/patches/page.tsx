@@ -311,8 +311,8 @@ export default function PatchesPage() {
               : `No ${filter === 'vulns' ? 'vulnerabilities' : 'outdated packages'} found`}
           </div>
         ) : (
-          filteredQueue.map((item) => {
-            const key = `${item.type}:${item.package}:${item.targetVersion}`;
+          filteredQueue.map((item, index) => {
+            const key = `${item.type}:${item.package}:${item.severity}:${item.targetVersion || index}`;
             const isSelected = selectedPackages.has(key);
 
             return (
