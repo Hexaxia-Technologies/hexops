@@ -1,11 +1,32 @@
 # HexOps Development Notes
 
-**Current Version:** 0.3.0
-**Purpose:** Internal development operations dashboard for managing Hexaxia project dev servers. Start/stop projects, view logs, clear caches, and monitor status from a single interface.
+**Current Version:** 0.4.0
+**Purpose:** Internal development operations dashboard for managing Hexaxia project dev servers. Start/stop projects, view logs, manage patches, and monitor status from a single interface.
 
 ---
 
 ## Version History
+
+### v0.4.0 (2026-01-19)
+- **Patches Page** - Centralized vulnerability and outdated package management
+  - Scan all projects for outdated packages (`pnpm outdated`) and vulnerabilities (`pnpm audit`)
+  - Priority queue sorted by severity (critical > high > moderate > major > minor > patch)
+  - Flat view and grouped-by-project view modes
+  - Batch update selected packages across projects
+  - Category filtering via left sidebar
+  - Right sidebar shows update progress and history
+- **Package Holds** - Skip problematic packages during updates
+  - Per-project holds stored in config
+  - Hold/unhold via pause/play icons
+  - Held packages dimmed, excluded from selection
+  - "On Hold" filter toggle to show/hide
+- **Add/Edit Projects** - Manage projects from UI
+  - Add project dialog with path scanning
+  - Edit existing project configurations
+  - Save changes to hexops.config.json
+- **Transitive Vulnerability Info** - Shows dependency chain for unfixable vulns
+  - `via` chain showing which direct dependency pulls in the vulnerable package
+  - Indicator when parent package needs to update its dependencies
 
 ### v0.3.0 (2026-01-18)
 - **Project Detail Page** - cPanel-style control panel for individual projects
@@ -141,6 +162,13 @@ page.tsx
 | `/api/projects/[id]/vercel` | POST | Deploy to Vercel (accepts `production: boolean`) |
 | `/api/projects/[id]/outdated` | GET | Run pnpm outdated |
 | `/api/projects/[id]/audit` | GET | Run pnpm audit |
+| `/api/projects/[id]/update` | POST | Update specific packages |
+| `/api/projects/[id]/holds` | GET/POST/DELETE | Manage package holds |
+| `/api/projects/save` | POST | Save project config changes |
+| `/api/projects/scan-path` | POST | Scan path for project info |
+| `/api/patches` | GET | Get all patches across projects |
+| `/api/patches/scan` | POST | Force rescan all projects |
+| `/api/patches/history` | GET | Get patch update history |
 
 ### Process Management
 
@@ -205,10 +233,12 @@ page.tsx
       "path": "/absolute/path/to/project",
       "port": 3000,
       "category": "Product|Client|Internal|Personal",
+      "description": "Optional project description",
       "scripts": {
         "dev": "pnpm dev",
         "build": "pnpm build"
-      }
+      },
+      "holds": ["package-name"]  // Optional: packages to skip during updates
     }
   ],
   "categories": ["Product", "Client", "Internal", "Personal"]
@@ -228,12 +258,16 @@ page.tsx
 
 - [ ] Project health checks (ping endpoints)
 - [x] Dependency vulnerability scanning (pnpm audit integration added)
+- [x] Patches page with batch updates
+- [x] Package holds (skip problematic packages)
 - [ ] Batch operations (start all, stop all)
 - [x] Project details panel (full detail page with control panel)
 - [x] Git status integration (branch, dirty, pull/push)
 - [x] Build/deploy triggers (Vercel deploy, dual start mode)
+- [x] Add/Edit projects from UI
 - [ ] Keyboard shortcuts (j/k navigation, Enter to start)
-- [ ] Toast notifications for async operations
+- [x] Toast notifications for async operations
 - [ ] Confirmation dialogs for destructive actions
 - [ ] Log filtering and search
 - [ ] Environment variable viewer
+- [ ] Auto-update minor/patch dependencies on schedule
