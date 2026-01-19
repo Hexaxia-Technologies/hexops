@@ -20,6 +20,7 @@ export interface ProjectExtendedStatus {
   };
   packages?: {
     outdatedCount: number;
+    heldCount?: number;  // How many of the outdated packages are on hold
     vulnerabilityCount?: number;
     criticalVulnerabilityCount?: number;
   };

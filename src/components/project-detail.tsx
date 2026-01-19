@@ -30,15 +30,21 @@ import {
   Rocket,
   Link,
   Package,
+  Check,
+  X,
+  Pencil,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { Project } from '@/lib/types';
+import { toast } from 'sonner';
+import type { Project, ProjectConfig } from '@/lib/types';
+import { AddProjectDialog } from './add-project-dialog';
 
 // Collapsible section components
 import { LogsSection } from './detail-sections/logs-section';
 import { InfoSection } from './detail-sections/info-section';
 import { GitSection } from './detail-sections/git-section';
 import { PackageHealthSection } from './detail-sections/package-health-section';
+import { PatchHistorySection } from './detail-sections/patch-history-section';
 
 interface ProjectDetailProps {
   project: Project;
@@ -54,6 +60,7 @@ interface ProjectDetailProps {
     subType: 'outdated' | 'audit',
     rawOutput: string
   ) => void;
+  categories?: string[];
 }
 
 interface Metrics {
@@ -83,6 +90,8 @@ interface GitInfo {
   isDirty: boolean;
   uncommittedCount: number;
   untrackedCount: number;
+  aheadCount: number;
+  behindCount: number;
 }
 
 interface ProjectInfo {
@@ -118,9 +127,11 @@ export function ProjectDetail({
   onDeleteLock,
   onRefresh,
   onOpenPackageHealthPanel,
+  categories = [],
 }: ProjectDetailProps) {
   const [isToggling, setIsToggling] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
+  const [showEditDialog, setShowEditDialog] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [gitInfo, setGitInfo] = useState<GitInfo | null>(null);
@@ -131,7 +142,11 @@ export function ProjectDetail({
   const [showStartMenu, setShowStartMenu] = useState(false);
   const [startMode, setStartMode] = useState<'dev' | 'prod' | null>(null);
   const [isUpdatingPackages, setIsUpdatingPackages] = useState(false);
+  const [logsKey, setLogsKey] = useState(0); // Used to force logs section to re-render and open
+  const [showCommitInput, setShowCommitInput] = useState(false);
+  const [commitMessage, setCommitMessage] = useState('');
   const startMenuRef = useRef<HTMLDivElement>(null);
+  const commitInputRef = useRef<HTMLInputElement>(null);
 
   const isRunning = project.status === 'running';
 
@@ -227,11 +242,41 @@ export function ProjectDetail({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode }),
       });
+      const data = await res.json();
+
       if (!res.ok) {
-        const data = await res.json();
-        console.error('Start failed:', data.error);
+        // Handle "already running" as success - just means it's up
+        if (data.status === 'running' || data.error?.includes('already running')) {
+          toast.success(`${project.name} is already running`);
+          setLogsKey(k => k + 1);
+        } else {
+          toast.error(`Failed to start: ${data.error || 'Unknown error'}`);
+          console.error('Start failed:', data.error);
+          return;
+        }
+      } else {
+        toast.success(`Starting ${project.name} in ${mode} mode...`);
+      }
+
+      // Poll until project is actually running (max 15 seconds)
+      const maxAttempts = 15;
+      for (let i = 0; i < maxAttempts; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        onRefresh();
+        // Check if project is now running by fetching fresh status
+        const statusRes = await fetch(`/api/projects`);
+        const statusData = await statusRes.json();
+        const updatedProject = statusData.projects?.find((p: Project) => p.id === project.id);
+        if (updatedProject?.status === 'running') {
+          // Force logs section to re-render and open
+          setLogsKey(k => k + 1);
+          break;
+        }
       }
       onRefresh();
+    } catch (err) {
+      toast.error('Failed to start project');
+      console.error('Start error:', err);
     } finally {
       setIsToggling(false);
       setStartMode(null);
@@ -242,7 +287,26 @@ export function ProjectDetail({
     setIsToggling(true);
     try {
       await onStop(project.id);
+      // Parent (page.tsx) handles toast
+
+      // Poll until project is actually stopped (max 10 seconds)
+      // Port may take time to be released after process termination
+      const maxAttempts = 10;
+      for (let i = 0; i < maxAttempts; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Check if project is now stopped by fetching fresh status
+        const statusRes = await fetch(`/api/projects`);
+        const statusData = await statusRes.json();
+        const updatedProject = statusData.projects?.find((p: Project) => p.id === project.id);
+        if (updatedProject?.status === 'stopped') {
+          onRefresh();
+          break;
+        }
+      }
       onRefresh();
+    } catch (err) {
+      toast.error('Failed to stop project');
+      console.error('Stop error:', err);
     } finally {
       setIsToggling(false);
     }
@@ -252,10 +316,37 @@ export function ProjectDetail({
     setIsRestarting(true);
     try {
       await onStop(project.id);
-      // Brief delay before starting
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      // Poll until project is actually stopped (max 10 seconds)
+      for (let i = 0; i < 10; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const statusRes = await fetch(`/api/projects`);
+        const statusData = await statusRes.json();
+        const updatedProject = statusData.projects?.find((p: Project) => p.id === project.id);
+        if (updatedProject?.status === 'stopped') {
+          break;
+        }
+      }
+
+      // Now start the project
       await onStart(project.id);
+      toast.success(`Restarting ${project.name}...`);
+
+      // Poll until project is actually running (max 15 seconds)
+      for (let i = 0; i < 15; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const statusRes = await fetch(`/api/projects`);
+        const statusData = await statusRes.json();
+        const updatedProject = statusData.projects?.find((p: Project) => p.id === project.id);
+        if (updatedProject?.status === 'running') {
+          setLogsKey(k => k + 1);
+          break;
+        }
+      }
       onRefresh();
+    } catch (err) {
+      toast.error('Failed to restart project');
+      console.error('Restart error:', err);
     } finally {
       setIsRestarting(false);
     }
@@ -305,6 +396,7 @@ export function ProjectDetail({
       const res = await fetch(`/api/projects/${project.id}/git-pull`, { method: 'POST' });
       if (res.ok) {
         await fetchGitInfo();
+        onRefresh(); // Update dashboard git status
       }
     } catch {
       // Silently fail
@@ -319,9 +411,39 @@ export function ProjectDetail({
       const res = await fetch(`/api/projects/${project.id}/git-push`, { method: 'POST' });
       if (res.ok) {
         await fetchGitInfo();
+        onRefresh(); // Update dashboard git status
       }
     } catch {
       // Silently fail
+    } finally {
+      setGitLoading(null);
+    }
+  };
+
+  const handleGitCommit = async () => {
+    if (!commitMessage.trim()) {
+      toast.error('Please enter a commit message');
+      return;
+    }
+    setGitLoading('commit');
+    try {
+      const res = await fetch(`/api/projects/${project.id}/git-commit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: commitMessage.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        toast.success('Changes committed');
+        setCommitMessage('');
+        setShowCommitInput(false);
+        await fetchGitInfo();
+        onRefresh(); // Update dashboard git status
+      } else {
+        toast.error(data.error || 'Commit failed');
+      }
+    } catch {
+      toast.error('Failed to commit');
     } finally {
       setGitLoading(null);
     }
@@ -414,7 +536,18 @@ export function ProjectDetail({
                 :{project.port}
               </Badge>
             </div>
-            <p className="text-xs text-zinc-500 mt-0.5 font-mono">{project.path}</p>
+            <div className="flex items-center gap-2 mt-0.5">
+              <p className="text-xs text-zinc-500 font-mono">{project.path}</p>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-5 w-5 p-0 text-zinc-500 hover:text-zinc-300"
+                onClick={() => setShowEditDialog(true)}
+                title="Edit project"
+              >
+                <Pencil className="h-3 w-3" />
+              </Button>
+            </div>
           </div>
         </div>
       </header>
@@ -522,21 +655,76 @@ export function ProjectDetail({
                   className="h-8 text-xs text-zinc-400 hover:text-zinc-100"
                   onClick={handleGitPull}
                   disabled={gitLoading === 'pull'}
+                  title={gitInfo.behindCount > 0 ? `Pull ${gitInfo.behindCount} commit${gitInfo.behindCount !== 1 ? 's' : ''}` : 'Pull from remote'}
                 >
                   <ArrowDown className={cn('h-3.5 w-3.5 mr-1', gitLoading === 'pull' && 'animate-bounce')} />
-                  Pull
+                  Pull{gitInfo.behindCount > 0 && ` (${gitInfo.behindCount})`}
                 </Button>
+
+                {/* Commit button/input */}
+                {showCommitInput ? (
+                  <div className="flex items-center gap-1">
+                    <input
+                      ref={commitInputRef}
+                      type="text"
+                      placeholder="Commit message..."
+                      value={commitMessage}
+                      onChange={(e) => setCommitMessage(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleGitCommit();
+                        if (e.key === 'Escape') {
+                          setShowCommitInput(false);
+                          setCommitMessage('');
+                        }
+                      }}
+                      className="h-8 px-2 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-purple-500 w-48"
+                      autoFocus
+                    />
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-8 w-8 p-0 text-green-400 hover:text-green-300 hover:bg-green-500/10"
+                      onClick={handleGitCommit}
+                      disabled={gitLoading === 'commit' || !commitMessage.trim()}
+                    >
+                      <Check className={cn('h-4 w-4', gitLoading === 'commit' && 'animate-pulse')} />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-8 w-8 p-0 text-zinc-400 hover:text-zinc-200"
+                      onClick={() => {
+                        setShowCommitInput(false);
+                        setCommitMessage('');
+                      }}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-8 text-xs text-zinc-400 hover:text-zinc-100"
+                    onClick={() => setShowCommitInput(true)}
+                    disabled={!gitInfo.isDirty}
+                    title={gitInfo.isDirty ? 'Commit changes' : 'No changes to commit'}
+                  >
+                    <GitCommit className="h-3.5 w-3.5 mr-1" />
+                    Commit
+                  </Button>
+                )}
 
                 <Button
                   size="sm"
                   variant="ghost"
                   className="h-8 text-xs text-zinc-400 hover:text-zinc-100"
                   onClick={handleGitPush}
-                  disabled={gitLoading === 'push' || !gitInfo.isDirty}
-                  title={gitInfo.isDirty ? 'Push commits' : 'No changes to push'}
+                  disabled={gitLoading === 'push' || gitInfo.aheadCount === 0}
+                  title={gitInfo.aheadCount > 0 ? `Push ${gitInfo.aheadCount} commit${gitInfo.aheadCount !== 1 ? 's' : ''}` : 'No commits to push'}
                 >
                   <ArrowUp className={cn('h-3.5 w-3.5 mr-1', gitLoading === 'push' && 'animate-bounce')} />
-                  Push
+                  Push{gitInfo.aheadCount > 0 && ` (${gitInfo.aheadCount})`}
                 </Button>
 
                 <Button
@@ -834,7 +1022,7 @@ export function ProjectDetail({
         </div>
 
         {/* Collapsible Sections */}
-        <CollapsibleSection title="Logs" defaultOpen={isRunning}>
+        <CollapsibleSection key={`logs-${logsKey}`} title="Logs" defaultOpen={isRunning}>
           <LogsSection projectId={project.id} isRunning={isRunning} />
         </CollapsibleSection>
 
@@ -852,10 +1040,24 @@ export function ProjectDetail({
             projectPath={project.path}
             projectName={project.name}
             initialOutdatedCount={project.extended?.packages?.outdatedCount}
+            holds={project.holds || []}
             onOpenPanel={onOpenPackageHealthPanel}
           />
         </CollapsibleSection>
+
+        <CollapsibleSection title="Patch History">
+          <PatchHistorySection projectId={project.id} />
+        </CollapsibleSection>
       </div>
+
+      {/* Edit Project Dialog */}
+      <AddProjectDialog
+        open={showEditDialog}
+        onOpenChange={setShowEditDialog}
+        onSuccess={onRefresh}
+        categories={categories}
+        editProject={project as ProjectConfig}
+      />
     </div>
   );
 }

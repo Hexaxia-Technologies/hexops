@@ -10,8 +10,8 @@ export async function GET(_request: NextRequest) {
     const categories = getCategories();
     const state = readPatchState();
 
-    // Exclude hexops from patches - can't patch itself while running
-    const projects = allProjects.filter(p => p.id !== 'hexops');
+    // All projects can be scanned and patched (hexops works fine in dev mode with hot reload)
+    const projects = allProjects;
 
     // Build project ID -> name mapping and holds map
     const projectMap: Record<string, string> = {};

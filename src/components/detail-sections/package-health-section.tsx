@@ -12,6 +12,7 @@ interface PackageHealthSectionProps {
   projectPath: string;
   projectName: string;
   initialOutdatedCount?: number;
+  holds?: string[];  // Package names on hold (excluded from updates)
   onOpenPanel?: (
     projectId: string,
     projectName: string,
@@ -43,7 +44,7 @@ interface PackageHealth {
   lastAuditDate?: string;
 }
 
-export function PackageHealthSection({ projectId, projectName, initialOutdatedCount, onOpenPanel }: PackageHealthSectionProps) {
+export function PackageHealthSection({ projectId, projectName, initialOutdatedCount, holds = [], onOpenPanel }: PackageHealthSectionProps) {
   const [health, setHealth] = useState<PackageHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [auditing, setAuditing] = useState(false);
@@ -145,8 +146,9 @@ export function PackageHealthSection({ projectId, projectName, initialOutdatedCo
 
   const selectAllOutdated = () => {
     if (!health) return;
+    // Exclude held packages from selection
     const outdated = [...health.dependencies, ...health.devDependencies]
-      .filter(d => d.isOutdated)
+      .filter(d => d.isOutdated && !holds.includes(d.name))
       .map(d => d.name);
     setSelectedPackages(new Set(outdated));
   };
@@ -347,6 +349,7 @@ export function PackageHealthSection({ projectId, projectName, initialOutdatedCo
             deps={health.dependencies}
             selectedPackages={selectedPackages}
             onToggleSelect={togglePackageSelection}
+            holds={holds}
           />
         </div>
       </div>
@@ -362,6 +365,7 @@ export function PackageHealthSection({ projectId, projectName, initialOutdatedCo
               deps={health.devDependencies}
               selectedPackages={selectedPackages}
               onToggleSelect={togglePackageSelection}
+              holds={holds}
             />
           </div>
         </div>
@@ -374,57 +378,75 @@ interface DependencyListProps {
   deps: Dependency[];
   selectedPackages: Set<string>;
   onToggleSelect: (name: string) => void;
+  holds: string[];
 }
 
-function DependencyList({ deps, selectedPackages, onToggleSelect }: DependencyListProps) {
+function DependencyList({ deps, selectedPackages, onToggleSelect, holds }: DependencyListProps) {
   if (deps.length === 0) {
     return <p className="text-zinc-500 text-sm">No dependencies</p>;
   }
 
   return (
     <div className="space-y-1">
-      {deps.map((dep) => (
-        <div
-          key={dep.name}
-          className={cn(
-            'flex items-center justify-between py-1.5 px-3 rounded text-sm',
-            dep.isOutdated
-              ? 'bg-yellow-500/10 border border-yellow-500/20 cursor-pointer hover:bg-yellow-500/20'
-              : 'bg-zinc-900',
-            selectedPackages.has(dep.name) && 'bg-yellow-500/20 border-yellow-500/40'
-          )}
-          onClick={() => dep.isOutdated && onToggleSelect(dep.name)}
-        >
-          <div className="flex items-center gap-2">
-            {dep.isOutdated && (
-              <Checkbox
-                checked={selectedPackages.has(dep.name)}
-                onCheckedChange={() => onToggleSelect(dep.name)}
-              />
+      {deps.map((dep) => {
+        const isHeld = holds.includes(dep.name);
+        return (
+          <div
+            key={dep.name}
+            className={cn(
+              'flex items-center justify-between py-1.5 px-3 rounded text-sm',
+              dep.isOutdated && !isHeld
+                ? 'bg-yellow-500/10 border border-yellow-500/20 cursor-pointer hover:bg-yellow-500/20'
+                : dep.isOutdated && isHeld
+                ? 'bg-zinc-800/50 border border-zinc-700/50'
+                : 'bg-zinc-900',
+              selectedPackages.has(dep.name) && !isHeld && 'bg-yellow-500/20 border-yellow-500/40'
             )}
-            <span className={cn(
-              'font-mono',
-              dep.isOutdated ? 'text-yellow-300' : 'text-zinc-300'
-            )}>
-              {dep.name}
-            </span>
+            onClick={() => dep.isOutdated && !isHeld && onToggleSelect(dep.name)}
+          >
+            <div className="flex items-center gap-2">
+              {dep.isOutdated && !isHeld && (
+                <Checkbox
+                  checked={selectedPackages.has(dep.name)}
+                  onCheckedChange={() => onToggleSelect(dep.name)}
+                />
+              )}
+              {dep.isOutdated && isHeld && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-zinc-600 text-zinc-500">
+                  HELD
+                </Badge>
+              )}
+              <span className={cn(
+                'font-mono',
+                dep.isOutdated && !isHeld ? 'text-yellow-300' :
+                dep.isOutdated && isHeld ? 'text-zinc-500' :
+                'text-zinc-300'
+              )}>
+                {dep.name}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={cn(
+                'font-mono',
+                dep.isOutdated && !isHeld ? 'text-yellow-500/70' :
+                dep.isOutdated && isHeld ? 'text-zinc-600' :
+                'text-zinc-500'
+              )}>
+                {dep.current}
+              </span>
+              {dep.isOutdated && dep.latest && (
+                <>
+                  <span className="text-zinc-600">→</span>
+                  <span className={cn(
+                    'font-mono',
+                    isHeld ? 'text-zinc-600' : 'text-green-400'
+                  )}>{dep.latest}</span>
+                </>
+              )}
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className={cn(
-              'font-mono',
-              dep.isOutdated ? 'text-yellow-500/70' : 'text-zinc-500'
-            )}>
-              {dep.current}
-            </span>
-            {dep.isOutdated && dep.latest && (
-              <>
-                <span className="text-zinc-600">→</span>
-                <span className="font-mono text-green-400">{dep.latest}</span>
-              </>
-            )}
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

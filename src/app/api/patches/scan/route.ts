@@ -1,13 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getProjects } from '@/lib/config';
+import { getProjects, getCategories } from '@/lib/config';
 import { scanProject, buildPriorityQueue } from '@/lib/patch-scanner';
 import { writePatchState, readPatchState } from '@/lib/patch-storage';
 import type { ProjectPatchCache } from '@/lib/types';
 
 export async function POST(_request: NextRequest) {
   try {
-    const projects = getProjects();
+    const allProjects = getProjects();
+    const categories = getCategories();
     const failedProjects: string[] = [];
+
+    // All projects can be scanned and patched (hexops works fine in dev mode with hot reload)
+    const projects = allProjects;
+
+    // Build project ID -> name mapping
+    const projectMap: Record<string, string> = {};
+    const projectCategories: Record<string, string> = {};
+    for (const project of projects) {
+      projectMap[project.id] = project.name;
+      projectCategories[project.id] = project.category;
+    }
 
     // Force refresh all projects
     const caches = await Promise.all(
@@ -30,8 +42,8 @@ export async function POST(_request: NextRequest) {
     state.lastFullScan = new Date().toISOString();
     writePatchState(state);
 
-    // Build priority queue
-    const { queue, summary } = buildPriorityQueue(validCaches);
+    // Build priority queue with project names
+    const { queue, summary } = buildPriorityQueue(validCaches, projectMap);
 
     return NextResponse.json({
       success: failedProjects.length === 0,
@@ -39,6 +51,8 @@ export async function POST(_request: NextRequest) {
       summary,
       lastScan: state.lastFullScan,
       projectCount: projects.length,
+      categories,
+      projectCategories,
       scannedCount: validCaches.length,
       failedProjects,
     });

@@ -1,10 +1,9 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { existsSync } from 'fs';
-import { join } from 'path';
 import type { ProjectConfig, ProjectExtendedStatus } from './types';
 import { getProcessInfo } from './process-manager';
 import { auditCache } from '@/app/api/projects/[id]/package-health/route';
+import { readProjectCache } from './patch-storage';
 
 const execAsync = promisify(exec);
 
@@ -95,81 +94,44 @@ function parseElapsedTime(etime: string): number {
   return seconds;
 }
 
-// Get outdated package count (cached, slower operation)
-const packageStatusCache = new Map<string, { count: number; timestamp: number }>();
+// Cache TTL for vulnerability data from audit endpoint
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-async function getPackageStatus(path: string): Promise<ProjectExtendedStatus['packages'] | undefined> {
-  // Check cache first
-  const cached = packageStatusCache.get(path);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    return { outdatedCount: cached.count };
-  }
+/**
+ * Invalidate package status cache for a project
+ * @deprecated Cache is now managed by patch-storage.ts - use invalidateProjectCache instead
+ */
+export function invalidatePackageStatusCache(_path: string): void {
+  // No-op - cache is now managed by patch-storage.ts
+}
 
-  // Check for lockfiles to determine which package manager to use
-  const hasPnpmLock = existsSync(join(path, 'pnpm-lock.yaml'));
-  const hasNpmLock = existsSync(join(path, 'package-lock.json'));
-  const hasYarnLock = existsSync(join(path, 'yarn.lock'));
+/**
+ * Invalidate package status cache for all projects
+ * @deprecated Cache is now managed by patch-storage.ts
+ */
+export function invalidateAllPackageStatusCache(): void {
+  // No-op - cache is now managed by patch-storage.ts
+}
 
-  // No lockfile - can't check outdated packages
-  if (!hasPnpmLock && !hasNpmLock && !hasYarnLock) {
+/**
+ * Get package status from unified patch cache
+ * Returns outdated count and held count from the patch scanner cache (single source of truth)
+ */
+function getPackageStatus(projectId: string, holds: string[] = []): ProjectExtendedStatus['packages'] | undefined {
+  // Read from unified patch cache (managed by patch-scanner.ts)
+  const cache = readProjectCache(projectId);
+  if (!cache) {
+    // Cache missing or expired - return undefined (dashboard will show '-')
     return undefined;
   }
 
-  try {
-    let stdout = '';
+  // Calculate how many outdated packages are held
+  const heldCount = cache.outdated.filter(pkg => holds.includes(pkg.name)).length;
 
-    if (hasPnpmLock) {
-      try {
-        const result = await execAsync('pnpm outdated --format json', {
-          cwd: path,
-          timeout: 10000
-        });
-        stdout = result.stdout;
-      } catch (err: unknown) {
-        // pnpm outdated exits with code 1 when outdated packages exist
-        const execErr = err as { stdout?: string };
-        stdout = execErr.stdout || '[]';
-      }
-    } else if (hasNpmLock) {
-      try {
-        const result = await execAsync('npm outdated --json', {
-          cwd: path,
-          timeout: 10000
-        });
-        stdout = result.stdout;
-      } catch (err: unknown) {
-        // npm outdated exits with code 1 when outdated packages exist
-        const execErr = err as { stdout?: string };
-        stdout = execErr.stdout || '{}';
-      }
-    } else {
-      // yarn
-      try {
-        const result = await execAsync('yarn outdated --json', {
-          cwd: path,
-          timeout: 10000
-        });
-        stdout = result.stdout;
-      } catch (err: unknown) {
-        const execErr = err as { stdout?: string };
-        stdout = execErr.stdout || '{}';
-      }
-    }
-
-    let count = 0;
-    try {
-      const parsed = JSON.parse(stdout.trim() || '[]');
-      count = Array.isArray(parsed) ? parsed.length : Object.keys(parsed).length;
-    } catch {
-      count = 0;
-    }
-
-    packageStatusCache.set(path, { count, timestamp: Date.now() });
-    return { outdatedCount: count };
-  } catch {
-    return undefined;
-  }
+  return {
+    outdatedCount: cache.outdated.length,
+    heldCount,
+  };
 }
 
 // Get vulnerability counts from audit cache
@@ -205,11 +167,9 @@ export async function getExtendedStatus(
     getGitStatus(project.path).then(git => { extended.git = git; }),
   ];
 
-  // Package status is slow - only include if requested and cached
+  // Package status - read from unified patch cache (synchronous)
   if (includePackages) {
-    promises.push(
-      getPackageStatus(project.path).then(packages => { extended.packages = packages; })
-    );
+    extended.packages = getPackageStatus(project.id, project.holds || []);
   }
 
   if (isRunning) {

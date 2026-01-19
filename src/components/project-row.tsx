@@ -165,9 +165,26 @@ export function ProjectRow({
               {ext.packages.outdatedCount > 0 ? ext.packages.outdatedCount : '!'}
             </span>
           ) : ext.packages.outdatedCount > 0 ? (
-            <span className="text-xs text-yellow-500" title={`${ext.packages.outdatedCount} outdated`}>
-              {ext.packages.outdatedCount}
-            </span>
+            // Check if all outdated packages are held
+            ext.packages.heldCount === ext.packages.outdatedCount ? (
+              <span
+                className="text-xs text-zinc-500"
+                title={`${ext.packages.outdatedCount} outdated (all held)`}
+              >
+                {ext.packages.outdatedCount}
+              </span>
+            ) : ext.packages.heldCount && ext.packages.heldCount > 0 ? (
+              <span
+                className="text-xs text-yellow-500"
+                title={`${ext.packages.outdatedCount} outdated (${ext.packages.heldCount} held)`}
+              >
+                {ext.packages.outdatedCount}
+              </span>
+            ) : (
+              <span className="text-xs text-yellow-500" title={`${ext.packages.outdatedCount} outdated`}>
+                {ext.packages.outdatedCount}
+              </span>
+            )
           ) : (
             <span title="All packages up to date">
               <CheckCircle className="h-3.5 w-3.5 text-green-600" />
