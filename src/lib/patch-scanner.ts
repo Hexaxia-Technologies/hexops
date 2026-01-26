@@ -78,7 +78,10 @@ export async function scanOutdated(
       output = execErr.stdout || '{}';
     }
 
-    const data = JSON.parse(output || '{}');
+    // pnpm/npm may output warnings before JSON - extract only the JSON portion
+    const jsonStart = output.search(/[\[{]/);
+    const jsonOutput = jsonStart >= 0 ? output.slice(jsonStart) : '{}';
+    const data = JSON.parse(jsonOutput);
     const result: OutdatedPackage[] = [];
 
     // pnpm format (array)
@@ -156,7 +159,10 @@ export async function scanVulnerabilities(
       output = execErr.stdout || '{}';
     }
 
-    const data = JSON.parse(output || '{}');
+    // pnpm/npm may output warnings before JSON - extract only the JSON portion
+    const jsonStart = output.search(/[\[{]/);
+    const jsonOutput = jsonStart >= 0 ? output.slice(jsonStart) : '{}';
+    const data = JSON.parse(jsonOutput);
     const result: VulnerabilityInfo[] = [];
 
     // pnpm/npm advisories format

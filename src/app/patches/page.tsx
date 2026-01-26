@@ -121,8 +121,12 @@ export default function PatchesPage() {
 
   // Create selection key for an item (1:1 relationship)
   // Include type and severity to handle cases like multiple vulns for same package
-  const getItemKey = (item: PatchQueueItem) =>
-    `${item.projectId}:${item.type}:${item.package}:${item.severity}:${item.targetVersion || 'no-fix'}`;
+  const getItemKey = (item: PatchQueueItem) => {
+    // For vulnerabilities with titles (multiple CVEs can affect same package), include title for uniqueness
+    // For outdated packages, the package+version combo is unique enough
+    const titlePart = item.type === 'vulnerability' && item.title ? `:${item.title}` : '';
+    return `${item.projectId}:${item.type}:${item.package}:${item.severity}:${item.targetVersion || 'no-fix'}${titlePart}`;
+  };
 
   const toggleSelection = (key: string) => {
     setSelectedPackages(prev => {

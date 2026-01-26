@@ -37,6 +37,7 @@ export interface Project extends ProjectConfig {
 }
 
 export interface HexOpsConfig {
+  projectsRoot?: string;
   projects: ProjectConfig[];
   categories: string[];
 }

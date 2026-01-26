@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { HexOpsConfig, ProjectConfig } from './types';
 
@@ -21,6 +21,7 @@ export function loadConfig(): HexOpsConfig {
   } catch (error) {
     console.error('Failed to load hexops.config.json:', error);
     return {
+      projectsRoot: process.cwd(),
       projects: [],
       categories: [],
     };
@@ -40,7 +41,22 @@ export function getCategories(): string[] {
   return loadConfig().categories;
 }
 
+export function getProjectsRoot(): string {
+  const config = loadConfig();
+  return config.projectsRoot || process.cwd();
+}
+
 export function reloadConfig(): HexOpsConfig {
   cachedConfig = null;
   return loadConfig();
+}
+
+export function saveConfig(config: HexOpsConfig): void {
+  try {
+    writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+    cachedConfig = config;
+  } catch (error) {
+    console.error('Failed to save hexops.config.json:', error);
+    throw error;
+  }
 }

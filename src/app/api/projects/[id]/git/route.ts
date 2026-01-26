@@ -54,6 +54,21 @@ export async function GET(
     const untrackedCount = statusLines.filter(line => line.startsWith('??')).length;
     const isDirty = statusLines.length > 0;
 
+    // Check for unpushed/unpulled commits (ahead/behind remote)
+    let aheadCount = 0;
+    let behindCount = 0;
+    try {
+      const { stdout: aheadBehind } = await execAsync(
+        'git rev-list --left-right --count @{u}...HEAD',
+        { cwd }
+      );
+      const [behind, ahead] = aheadBehind.trim().split(/\s+/).map(Number);
+      aheadCount = ahead || 0;
+      behindCount = behind || 0;
+    } catch {
+      // No upstream set or other error - ignore
+    }
+
     return NextResponse.json({
       branch: branch.trim(),
       lastCommit: {
@@ -65,6 +80,8 @@ export async function GET(
       isDirty,
       uncommittedCount,
       untrackedCount,
+      aheadCount,
+      behindCount,
     });
   } catch (error) {
     console.error('Error fetching git info:', error);

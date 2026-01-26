@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Package } from 'lucide-react';
+import { Package, Plus, TerminalSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { APP_VERSION } from '@/lib/version';
 
@@ -12,6 +12,8 @@ interface SidebarProps {
   projectCounts: Record<string, number>;
   runningCount: number;
   totalCount: number;
+  onAddProject?: () => void;
+  onOpenShell?: () => void;
 }
 
 export function Sidebar({
@@ -21,13 +23,15 @@ export function Sidebar({
   projectCounts,
   runningCount,
   totalCount,
+  onAddProject,
+  onOpenShell,
 }: SidebarProps) {
   return (
     <aside className="w-48 bg-zinc-950 border-r border-zinc-800 p-4 flex flex-col">
-      <div className="mb-6">
-        <h1 className="text-xl font-bold text-purple-400">HexOps</h1>
+      <Link href="/" className="block mb-6 group">
+        <h1 className="text-xl font-bold text-purple-400 group-hover:text-purple-300 transition-colors">HexOps</h1>
         <p className="text-xs text-zinc-500 mt-1">Dev Project Manager</p>
-      </div>
+      </Link>
 
       <nav className="flex-1 space-y-1">
         <button
@@ -95,6 +99,16 @@ export function Sidebar({
           </button>
         ))}
 
+        {onAddProject && (
+          <button
+            onClick={onAddProject}
+            className="w-full text-left px-3 py-2 rounded-md text-sm transition-colors flex items-center gap-2 text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800/50 mt-2"
+          >
+            <Plus className="h-4 w-4" />
+            Add Project
+          </button>
+        )}
+
         <div className="h-px bg-zinc-800 my-3" />
 
         <Link
@@ -107,6 +121,16 @@ export function Sidebar({
           <Package className="h-4 w-4" />
           Patches
         </Link>
+
+        {onOpenShell && (
+          <button
+            onClick={onOpenShell}
+            className="w-full text-left px-3 py-2 rounded-md text-sm transition-colors flex items-center gap-2 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50"
+          >
+            <TerminalSquare className="h-4 w-4" />
+            Shell
+          </button>
+        )}
       </nav>
 
       <div className="pt-4 border-t border-zinc-800 space-y-1">

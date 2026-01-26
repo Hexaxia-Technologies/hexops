@@ -2,12 +2,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { X, Terminal, Package } from 'lucide-react';
+import { X, Terminal, Package, TerminalSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { LogEntry } from '@/lib/types';
+import { ShellPanel as ShellPanelContent } from './shell-panel';
 
 // Panel types
-export type PanelType = 'logs' | 'package-health';
+export type PanelType = 'logs' | 'package-health' | 'shell';
 
 export interface LogsPanel {
   type: 'logs';
@@ -24,7 +25,13 @@ export interface PackageHealthPanel {
   title: string;
 }
 
-export type Panel = LogsPanel | PackageHealthPanel;
+export interface ShellPanel {
+  type: 'shell';
+  cwd: string;
+  label: string;
+}
+
+export type Panel = LogsPanel | PackageHealthPanel | ShellPanel;
 
 interface RightSidebarProps {
   panels: Panel[];
@@ -78,11 +85,14 @@ export function RightSidebar({
             >
               {panel.type === 'logs' ? (
                 <Terminal className="h-3.5 w-3.5" />
+              ) : panel.type === 'shell' ? (
+                <TerminalSquare className="h-3.5 w-3.5" />
               ) : (
                 <Package className="h-3.5 w-3.5" />
               )}
               <span>
                 {panel.type === 'logs' ? 'Logs' :
+                 panel.type === 'shell' ? 'Shell' :
                  (panel as PackageHealthPanel).subType === 'outdated' ? 'Updates' : 'Audit'}
               </span>
               <button
@@ -119,6 +129,12 @@ export function RightSidebar({
       {activePanelData?.type === 'package-health' && (
         <PackageHealthPanelContent
           panel={activePanelData as PackageHealthPanel}
+        />
+      )}
+      {activePanelData?.type === 'shell' && (
+        <ShellPanelContent
+          cwd={(activePanelData as ShellPanel).cwd}
+          label={(activePanelData as ShellPanel).label}
         />
       )}
     </aside>

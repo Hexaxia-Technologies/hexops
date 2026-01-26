@@ -6,8 +6,17 @@ import { Sidebar } from '@/components/sidebar';
 import { ProjectList } from '@/components/project-list';
 import { ProjectDetail } from '@/components/project-detail';
 import { RightSidebar, type Panel, type PanelType } from '@/components/right-sidebar';
+import { AddProjectDialog } from '@/components/add-project-dialog';
+import { SystemHealth } from '@/components/system-health';
 import { Button } from '@/components/ui/button';
 import type { Project } from '@/lib/types';
+
+interface PatchStatus {
+  patched: number;
+  unpatched: number;
+  heldPackages: number;
+  total: number;
+}
 
 type ViewMode = 'list' | 'detail';
 
@@ -22,6 +31,9 @@ export default function Home() {
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null);
+  const [showAddProject, setShowAddProject] = useState(false);
+  const [patchStatus, setPatchStatus] = useState<PatchStatus | null>(null);
+  const [projectsRoot, setProjectsRoot] = useState<string>('');
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -37,9 +49,70 @@ export default function Home() {
     }
   }, []);
 
+  const fetchPatchStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/patches');
+      const data = await res.json();
+
+      if (data.queue !== undefined && data.projectCount !== undefined) {
+        const total = data.projectCount;
+
+        // Group patches by project and count held packages
+        const patchesByProject: Record<string, number> = {};
+        let heldPackages = 0;
+
+        for (const patch of data.queue) {
+          if (!patchesByProject[patch.projectId]) {
+            patchesByProject[patch.projectId] = 0;
+          }
+          patchesByProject[patch.projectId]++;
+
+          // Count total held packages
+          if (patch.isHeld === true) {
+            heldPackages++;
+          }
+        }
+
+        // Get unique project IDs from projectCategories (all scanned projects)
+        const projectIds = data.projectCategories
+          ? Object.keys(data.projectCategories)
+          : Object.keys(patchesByProject);
+
+        // Count projects by patch status (simple: patched or unpatched)
+        let patched = 0;
+        let unpatched = 0;
+
+        for (const projectId of projectIds) {
+          const patchCount = patchesByProject[projectId] || 0;
+          if (patchCount === 0) {
+            patched++;
+          } else {
+            unpatched++;
+          }
+        }
+
+        setPatchStatus({ patched, unpatched, heldPackages, total });
+      }
+    } catch (error) {
+      console.error('Failed to fetch patch status:', error);
+    }
+  }, []);
+
+  const fetchConfig = useCallback(async () => {
+    try {
+      const res = await fetch('/api/config');
+      const data = await res.json();
+      setProjectsRoot(data.projectsRoot || '');
+    } catch (error) {
+      console.error('Failed to fetch config:', error);
+    }
+  }, []);
+
   useEffect(() => {
     fetchProjects();
-  }, [fetchProjects]);
+    fetchPatchStatus();
+    fetchConfig();
+  }, [fetchProjects, fetchPatchStatus, fetchConfig]);
 
   const handleStart = async (id: string) => {
     const project = projects.find(p => p.id === id);
@@ -50,12 +123,28 @@ export default function Home() {
         toast.success(`Starting ${project?.name || id}`, {
           description: `Port ${project?.port}`,
         });
+      } else if (data.status === 'running' || data.error?.includes('already running')) {
+        toast.success(`${project?.name || id} is already running`);
       } else {
         toast.error(`Failed to start ${project?.name || id}`, {
           description: data.error,
         });
+        return;
       }
-      setTimeout(fetchProjects, 1000);
+
+      // Poll until project is actually running (max 15 seconds)
+      for (let i = 0; i < 15; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const statusRes = await fetch('/api/projects');
+        const statusData = await statusRes.json();
+        const updatedProject = statusData.projects?.find((p: Project) => p.id === id);
+        if (updatedProject?.status === 'running') {
+          setProjects(statusData.projects);
+          setLastRefresh(new Date());
+          return;
+        }
+      }
+      fetchProjects();
     } catch (error) {
       toast.error(`Failed to start ${project?.name || id}`);
       console.error('Failed to start project:', error);
@@ -78,6 +167,20 @@ export default function Home() {
         toast.error(`Failed to stop ${project?.name || id}`, {
           description: data.error,
         });
+        return;
+      }
+
+      // Poll until project is actually stopped (max 10 seconds)
+      for (let i = 0; i < 10; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const statusRes = await fetch('/api/projects');
+        const statusData = await statusRes.json();
+        const updatedProject = statusData.projects?.find((p: Project) => p.id === id);
+        if (updatedProject?.status === 'stopped') {
+          setProjects(statusData.projects);
+          setLastRefresh(new Date());
+          return;
+        }
       }
       fetchProjects();
     } catch (error) {
@@ -139,6 +242,27 @@ export default function Home() {
   const handleCloseAllPanels = () => {
     setPanels([]);
     setActivePanel(null);
+  };
+
+  const handleOpenShell = (cwd?: string, label?: string) => {
+    console.log('[page] handleOpenShell called with cwd:', cwd, 'label:', label);
+    console.log('[page] Current viewMode:', viewMode, 'detailProjectId:', detailProjectId);
+
+    const shellCwd = cwd || projectsRoot || '/home';
+    const shellLabel = label || 'Projects';
+
+    // Add or update shell panel
+    setPanels(prev => {
+      const existing = prev.find(p => p.type === 'shell');
+      if (existing) {
+        return prev.map(p => p.type === 'shell'
+          ? { type: 'shell' as const, cwd: shellCwd, label: shellLabel }
+          : p
+        );
+      }
+      return [...prev, { type: 'shell' as const, cwd: shellCwd, label: shellLabel }];
+    });
+    setActivePanel('shell');
   };
 
   const handleClearCache = async (id: string) => {
@@ -211,6 +335,11 @@ export default function Home() {
 
   const runningCount = projects.filter((p) => p.status === 'running').length;
 
+  // Get detail project - safely handle case where project might not exist
+  const detailProject = viewMode === 'detail' && detailProjectId
+    ? projects.find(p => p.id === detailProjectId)
+    : null;
+
   if (isLoading) {
     return (
       <div className="flex h-screen bg-zinc-950 items-center justify-center">
@@ -229,6 +358,8 @@ export default function Home() {
         projectCounts={projectCounts}
         runningCount={runningCount}
         totalCount={projects.length}
+        onAddProject={() => setShowAddProject(true)}
+        onOpenShell={() => handleOpenShell()}
       />
 
       {/* Main Content - List or Detail View */}
@@ -266,6 +397,9 @@ export default function Home() {
             </header>
 
             <div className="flex-1 overflow-auto">
+              <div className="px-6 pt-6">
+                <SystemHealth patchStatus={patchStatus ?? undefined} />
+              </div>
               <ProjectList
                 projects={filteredProjects}
                 selectedId={selectedProjectId}
@@ -279,9 +413,9 @@ export default function Home() {
               />
             </div>
           </>
-        ) : (
+        ) : detailProject ? (
           <ProjectDetail
-            project={projects.find(p => p.id === detailProjectId)!}
+            project={detailProject}
             onBack={handleBackToList}
             onStart={handleStart}
             onStop={handleStop}
@@ -289,7 +423,13 @@ export default function Home() {
             onDeleteLock={handleDeleteLock}
             onRefresh={fetchProjects}
             onOpenPackageHealthPanel={handleOpenPackageHealthPanel}
+            onOpenShell={handleOpenShell}
+            categories={categories}
           />
+        ) : (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-zinc-500">Loading project details...</div>
+          </div>
         )}
       </main>
 
@@ -300,6 +440,14 @@ export default function Home() {
         onActivate={setActivePanel}
         onClose={handleClosePanel}
         onCloseAll={handleCloseAllPanels}
+      />
+
+      {/* Add Project Dialog */}
+      <AddProjectDialog
+        open={showAddProject}
+        onOpenChange={setShowAddProject}
+        onSuccess={fetchProjects}
+        categories={categories}
       />
     </div>
   );

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getProject } from '@/lib/config';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import {
   addPatchHistoryEntry,
@@ -10,6 +10,7 @@ import {
   invalidateProjectCache,
 } from '@/lib/patch-storage';
 import { getUpdateType } from '@/lib/patch-scanner';
+import { invalidatePackageStatusCache } from '@/lib/extended-status';
 import type { PatchHistoryEntry } from '@/lib/types';
 
 const execAsync = promisify(exec);
@@ -46,6 +47,18 @@ export async function POST(
     const hasPnpmLock = existsSync(join(cwd, 'pnpm-lock.yaml'));
     const hasNpmLock = existsSync(join(cwd, 'package-lock.json'));
     const hasYarnLock = existsSync(join(cwd, 'yarn.lock'));
+
+    // Check if this is a workspace project (has workspaces in package.json)
+    let isWorkspaceProject = false;
+    try {
+      const pkgJsonPath = join(cwd, 'package.json');
+      if (existsSync(pkgJsonPath)) {
+        const pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf-8'));
+        isWorkspaceProject = Array.isArray(pkgJson.workspaces) && pkgJson.workspaces.length > 0;
+      }
+    } catch {
+      // Ignore errors reading package.json
+    }
 
     if (!hasPnpmLock && !hasNpmLock && !hasYarnLock) {
       return NextResponse.json({
@@ -100,11 +113,20 @@ export async function POST(
 
         let installCmd: string;
         if (packageManager === 'pnpm') {
-          installCmd = `pnpm add ${pkg.name}@${targetVersion}`;
+          // pnpm -w flag for workspace root, -r for recursive workspaces
+          installCmd = isWorkspaceProject
+            ? `pnpm add ${pkg.name}@${targetVersion} -r`
+            : `pnpm add ${pkg.name}@${targetVersion}`;
         } else if (packageManager === 'npm') {
-          installCmd = `npm install ${pkg.name}@${targetVersion}`;
+          // npm --workspaces flag to update across all workspaces
+          installCmd = isWorkspaceProject
+            ? `npm install ${pkg.name}@${targetVersion} --workspaces --include-workspace-root`
+            : `npm install ${pkg.name}@${targetVersion}`;
         } else {
-          installCmd = `yarn add ${pkg.name}@${targetVersion}`;
+          // yarn workspaces foreach for workspace projects
+          installCmd = isWorkspaceProject
+            ? `yarn workspaces foreach add ${pkg.name}@${targetVersion}`
+            : `yarn add ${pkg.name}@${targetVersion}`;
         }
 
         try {
@@ -171,11 +193,11 @@ export async function POST(
       // No packages specified - run standard update within semver range
       let cmd: string;
       if (packageManager === 'pnpm') {
-        cmd = 'pnpm update';
+        cmd = isWorkspaceProject ? 'pnpm update -r' : 'pnpm update';
       } else if (packageManager === 'npm') {
-        cmd = 'npm update';
+        cmd = isWorkspaceProject ? 'npm update --workspaces --include-workspace-root' : 'npm update';
       } else {
-        cmd = 'yarn upgrade';
+        cmd = isWorkspaceProject ? 'yarn workspaces foreach upgrade' : 'yarn upgrade';
       }
 
       try {
@@ -200,8 +222,9 @@ export async function POST(
       }
     }
 
-    // Invalidate cache for this project
+    // Invalidate caches for this project
     invalidateProjectCache(id);
+    invalidatePackageStatusCache(cwd);
 
     const allSucceeded = results.every(r => r.success);
     const output = results.map(r => r.output).join('\n\n');

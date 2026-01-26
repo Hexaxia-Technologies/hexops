@@ -1,11 +1,41 @@
 # HexOps Development Notes
 
-**Current Version:** 0.4.0
+**Current Version:** 0.6.0
 **Purpose:** Internal development operations dashboard for managing Hexaxia project dev servers. Start/stop projects, view logs, manage patches, and monitor status from a single interface.
 
 ---
 
 ## Version History
+
+### v0.6.0 (2026-01-25)
+- **Shell Panel** - Integrated terminal in the right sidebar
+  - Opens from sidebar (uses `projectsRoot` config) or project detail (uses project path)
+  - Real PTY shell via node-pty with full terminal emulation
+  - xterm.js for terminal rendering with proper colors and cursor
+  - WebSocket connection for real-time I/O
+  - Reconnect button when connection drops
+- **System Health Dashboard** - Real-time system metrics on main dashboard
+  - CPU, Memory, Disk radial gauges with color-coded thresholds
+  - Sparkline history charts for CPU and Memory (60 seconds)
+  - Patch status pie chart showing patched vs unpatched projects
+  - 5-second polling interval
+- **Custom Next.js Server** - Required for WebSocket support
+  - `server.js` handles both HTTP and WebSocket connections
+  - Uses `app.getUpgradeHandler()` to properly route Next.js HMR
+  - Shell WebSocket at `/api/shell/ws`
+- **Configuration** - Added `projectsRoot` to config for default shell directory
+
+### v0.5.0 (2026-01-20)
+- **Unified Patch Data** - Single source of truth for all patch/outdated data
+  - Extended-status now reads from patch-scanner cache (no more dual systems)
+  - Dashboard, detail page, and patches page all show consistent counts
+  - Removed hexops self-exclusion (works fine in dev mode with hot reload)
+- **Hold Support Across All Views**
+  - Added `heldCount` to track how many outdated packages are held
+  - Dashboard badge dims (gray) when all outdated packages are held
+  - Package Health section shows "HELD" badge on held packages
+  - Held packages disabled from selection/update in Package Health
+  - "Select All" excludes held packages
 
 ### v0.4.0 (2026-01-19)
 - **Patches Page** - Centralized vulnerability and outdated package management
@@ -62,6 +92,58 @@
 ---
 
 ## Recent Changes
+
+### Shell Panel & System Health (v0.6.0)
+
+**Summary:** Added integrated terminal and system monitoring. Required custom Next.js server for WebSocket support.
+
+| File | Change |
+|------|--------|
+| `server.js` | New - Custom Next.js server with WebSocket handling |
+| `src/components/shell-panel.tsx` | New - xterm.js terminal component |
+| `src/components/system-health.tsx` | New - System metrics dashboard |
+| `src/components/radial-gauge.tsx` | New - Circular gauge component |
+| `src/components/sparkline.tsx` | New - Mini line chart component |
+| `src/app/api/system/metrics/route.ts` | New - CPU/memory/disk metrics endpoint |
+| `src/app/api/config/route.ts` | New - Config endpoint for projectsRoot |
+| `src/lib/system-metrics.ts` | New - System metrics collection |
+| `src/lib/types.ts` | Added `projectsRoot` to HexOpsConfig |
+| `src/lib/config.ts` | Added `getProjectsRoot()` function |
+| `src/components/right-sidebar.tsx` | Added shell panel type |
+| `src/components/sidebar.tsx` | Added Shell button |
+| `src/app/page.tsx` | Added handleOpenShell, projectsRoot state |
+| `public/xterm.css` | Copied from @xterm/xterm for terminal styling |
+| `.npmrc` | Added node-linker=hoisted for node-pty |
+| `package.json` | Changed dev script to use custom server |
+
+**Key Insights:**
+- node-pty requires native compilation; pnpm's default linking breaks it. Fixed with `node-linker=hoisted` in `.npmrc`
+- xterm.js CSS can't be imported directly in Next.js client components - must load via public folder
+- Custom Next.js server must use `app.getUpgradeHandler()` to properly handle HMR WebSocket, otherwise causes periodic page refreshes
+- React StrictMode double-mounts components in dev, which can cause WebSocket connect/disconnect cycles
+
+---
+
+### Unified Patch Data & Hold Support (v0.5.0)
+
+**Summary:** Eliminated dual patch systems that caused inconsistent counts between views. Now all views (dashboard, detail, patches) read from a single cache. Added full hold support across all views.
+
+| File | Change |
+|------|--------|
+| `src/lib/extended-status.ts` | Reads from patch-scanner cache instead of running own `pnpm outdated` |
+| `src/lib/types.ts` | Added `heldCount` to `ProjectExtendedStatus.packages` |
+| `src/app/api/patches/route.ts` | Removed hexops exclusion |
+| `src/app/api/patches/scan/route.ts` | Removed hexops exclusion |
+| `src/components/project-row.tsx` | Dashboard badge dims when all packages are held |
+| `src/components/project-detail.tsx` | Passes `holds` to PackageHealthSection |
+| `src/components/detail-sections/package-health-section.tsx` | Shows HELD badge, disables selection for held packages |
+
+**Key Insights:**
+- Two systems were fighting: extended-status (5-min cache) vs patch-scanner (1-hr cache)
+- hexops exclusion ("can't patch itself") was overly cautious - dev mode hot reload handles it fine
+- Hold status should be display-layer, not filtering - show held packages but disable actions
+
+---
 
 ### Project Detail Page & Control Panel (v0.3.0)
 
@@ -126,13 +208,16 @@ hexops.config.json → API routes → React state → Components
 
 ```
 page.tsx
-├── Sidebar (left) - navigation, filters
+├── Sidebar (left) - navigation, filters, shell button
 ├── main
 │   ├── header - title, refresh button
+│   ├── SystemHealth - CPU/memory/disk gauges, patch status
 │   └── ProjectList
 │       └── ProjectRow[] - each project
-└── RightSidebar - panels (logs, future: details)
-    └── LogPanel - live log streaming
+└── RightSidebar - panels
+    ├── LogPanel - live log streaming
+    ├── PackageHealthPanel - outdated/audit output
+    └── ShellPanel - integrated terminal (xterm.js)
 ```
 
 ### State Management
@@ -169,6 +254,9 @@ page.tsx
 | `/api/patches` | GET | Get all patches across projects |
 | `/api/patches/scan` | POST | Force rescan all projects |
 | `/api/patches/history` | GET | Get patch update history |
+| `/api/system/metrics` | GET | System CPU, memory, disk metrics |
+| `/api/config` | GET | Get config (projectsRoot) |
+| `/api/shell/ws` | WS | WebSocket for shell terminal |
 
 ### Process Management
 
@@ -207,7 +295,7 @@ page.tsx
 
 | Technology | Purpose | Version |
 |------------|---------|---------|
-| Next.js | React framework, API routes | 16.1.2 |
+| Next.js | React framework, API routes | 16.1.3 |
 | React | UI library | 19.2.3 |
 | TypeScript | Type safety | ^5 |
 | Tailwind CSS | Styling | ^4 |
@@ -216,6 +304,10 @@ page.tsx
 | shadcn/ui | Component library (Button, Badge, Card) | N/A (copied) |
 | Lucide React | Icons | ^0.562.0 |
 | Sonner | Toast notifications | ^2.0.7 |
+| Recharts | Charts (pie, sparklines) | ^2.15.3 |
+| xterm.js | Terminal emulator | @xterm/xterm |
+| node-pty | PTY shell spawning | ^1.0.0 |
+| ws | WebSocket server | ^8.18.0 |
 | pnpm | Package manager | Latest |
 
 ---
@@ -226,6 +318,7 @@ page.tsx
 
 ```json
 {
+  "projectsRoot": "/home/user/Projects",  // Default shell directory
   "projects": [
     {
       "id": "project-id",
@@ -265,6 +358,8 @@ page.tsx
 - [x] Git status integration (branch, dirty, pull/push)
 - [x] Build/deploy triggers (Vercel deploy, dual start mode)
 - [x] Add/Edit projects from UI
+- [x] Integrated terminal (shell panel with xterm.js)
+- [x] System health monitoring (CPU, memory, disk gauges)
 - [ ] Keyboard shortcuts (j/k navigation, Enter to start)
 - [x] Toast notifications for async operations
 - [ ] Confirmation dialogs for destructive actions

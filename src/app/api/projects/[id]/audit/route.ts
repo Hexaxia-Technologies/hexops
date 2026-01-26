@@ -88,8 +88,10 @@ To run a security audit, run one of these commands in the project directory:
         }
       }
 
-      // Parse audit output
-      const auditData = JSON.parse(auditOutput || '{}');
+      // Parse audit output - strip any warnings before JSON
+      const jsonStart = auditOutput.search(/[\[{]/);
+      const jsonOutput = jsonStart >= 0 ? auditOutput.slice(jsonStart) : '{}';
+      const auditData = JSON.parse(jsonOutput);
 
       // pnpm format
       if (auditData.advisories) {

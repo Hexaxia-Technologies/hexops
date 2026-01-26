@@ -86,8 +86,10 @@ To check for outdated packages, run one of these commands in the project directo
         }
       }
 
-      // Parse outdated output
-      const outdatedData = JSON.parse(outdatedOutput || '{}');
+      // Parse outdated output - strip any warnings before JSON
+      const jsonStart = outdatedOutput.search(/[\[{]/);
+      const jsonOutput = jsonStart >= 0 ? outdatedOutput.slice(jsonStart) : '{}';
+      const outdatedData = JSON.parse(jsonOutput);
 
       // pnpm format (array of objects)
       if (Array.isArray(outdatedData)) {

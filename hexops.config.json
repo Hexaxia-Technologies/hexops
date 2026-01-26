@@ -1,4 +1,5 @@
 {
+  "projectsRoot": "/home/aaron/Projects",
   "projects": [
     {
       "id": "hexops",
@@ -46,7 +47,10 @@
       "scripts": {
         "dev": "pnpm dev",
         "build": "pnpm build"
-      }
+      },
+      "holds": [
+        "next"
+      ]
     },
     {
       "id": "ddts",
@@ -82,7 +86,10 @@
       "scripts": {
         "dev": "pnpm dev",
         "build": "pnpm build"
-      }
+      },
+      "holds": [
+        "tailwindcss"
+      ]
     },
     {
       "id": "hexaxia-ai",
@@ -106,7 +113,10 @@
       "scripts": {
         "dev": "pnpm dev",
         "build": "pnpm build"
-      }
+      },
+      "holds": [
+        "tailwindcss"
+      ]
     },
     {
       "id": "hextant",
@@ -142,7 +152,12 @@
       "scripts": {
         "dev": "pnpm dev",
         "build": "pnpm build"
-      }
+      },
+      "holds": [
+        "@testing-library/react",
+        "@vercel/blob",
+        "undici"
+      ]
     },
     {
       "id": "sailbot-ai",
@@ -178,8 +193,79 @@
       "scripts": {
         "dev": "pnpm dev",
         "build": "pnpm build"
+      },
+      "holds": [
+        "@vercel/blob",
+        "undici"
+      ]
+    },
+    {
+      "id": "my-v0-project",
+      "name": "ALyfeV3",
+      "path": "/home/aaron/Projects/alyfe-v3/",
+      "port": 3140,
+      "category": "Personal",
+      "description": "Aarons Lyfe Blog",
+      "scripts": {
+        "dev": "next dev",
+        "build": "next build"
+      },
+      "holds": [
+        "tailwindcss"
+      ]
+    },
+    {
+      "id": "indyhcs-website",
+      "name": "indyhcs-website",
+      "path": "/home/aaron/Projects/indyhcs-website/",
+      "port": 3150,
+      "category": "Client",
+      "scripts": {
+        "dev": "npm run dev",
+        "build": "npm run build"
+      }
+    },
+    {
+      "id": "indyhcs-net",
+      "name": "indyhcs.net",
+      "path": "/home/aaron/Projects/indyhcs.net/",
+      "port": 3160,
+      "category": "Client",
+      "description": "Indyhcs  Client Site",
+      "scripts": {
+        "dev": "npm run dev",
+        "build": "npm run build"
+      }
+    },
+    {
+      "id": "kv9l",
+      "name": "KV9L",
+      "path": "/home/aaron/Projects/kv9l/",
+      "port": 3170,
+      "category": "Personal",
+      "description": "KV9L Website",
+      "scripts": {
+        "dev": "next dev",
+        "build": "next build"
+      }
+    },
+    {
+      "id": "hexaxia-media",
+      "name": "Hexaxia Media",
+      "path": "/home/aaron/Projects/hexaxia-media/",
+      "port": 3180,
+      "category": "Product",
+      "description": "Media Webiste",
+      "scripts": {
+        "dev": "next dev",
+        "build": "next build"
       }
     }
   ],
-  "categories": ["Product", "Client", "Internal", "Personal"]
+  "categories": [
+    "Product",
+    "Client",
+    "Internal",
+    "Personal"
+  ]
 }

@@ -60,6 +60,7 @@ interface ProjectDetailProps {
     subType: 'outdated' | 'audit',
     rawOutput: string
   ) => void;
+  onOpenShell?: (cwd: string, label: string) => void;
   categories?: string[];
 }
 
@@ -127,6 +128,7 @@ export function ProjectDetail({
   onDeleteLock,
   onRefresh,
   onOpenPackageHealthPanel,
+  onOpenShell,
   categories = [],
 }: ProjectDetailProps) {
   const [isToggling, setIsToggling] = useState(false);
@@ -961,11 +963,17 @@ export function ProjectDetail({
                 size="sm"
                 variant="ghost"
                 className="h-9 text-xs text-zinc-400 hover:text-zinc-100"
-                onClick={openTerminal}
-                title="Copy cd command to clipboard"
+                onClick={() => {
+                  if (onOpenShell) {
+                    onOpenShell(project.path, project.name);
+                  } else {
+                    openTerminal();
+                  }
+                }}
+                title={onOpenShell ? "Open shell panel" : "Copy cd command to clipboard"}
               >
                 <Terminal className="h-3.5 w-3.5 mr-1.5" />
-                Terminal
+                Shell
               </Button>
 
               <Button

@@ -78,7 +78,10 @@ export async function GET(
       });
 
       if (stdout.trim()) {
-        const deployments = JSON.parse(stdout);
+        // Strip any warnings before JSON
+        const jsonStart = stdout.search(/[\[{]/);
+        const jsonOutput = jsonStart >= 0 ? stdout.slice(jsonStart) : '[]';
+        const deployments = JSON.parse(jsonOutput);
         if (Array.isArray(deployments) && deployments.length > 0) {
           const latest = deployments[0];
           latestDeployment = {
