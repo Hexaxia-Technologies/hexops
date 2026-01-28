@@ -1,5 +1,4 @@
 {
-  "projectsRoot": "/home/aaron/Projects",
   "projects": [
     {
       "id": "hexops",
@@ -47,10 +46,7 @@
       "scripts": {
         "dev": "pnpm dev",
         "build": "pnpm build"
-      },
-      "holds": [
-        "next"
-      ]
+      }
     },
     {
       "id": "ddts",
@@ -247,7 +243,10 @@
       "scripts": {
         "dev": "next dev",
         "build": "next build"
-      }
+      },
+      "holds": [
+        "tailwindcss"
+      ]
     },
     {
       "id": "hexaxia-media",
