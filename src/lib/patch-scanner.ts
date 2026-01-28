@@ -70,11 +70,15 @@ export async function scanOutdated(
       : 'yarn outdated --json';
 
     try {
-      const { stdout } = await execAsync(cmd, { cwd: project.path });
+      const { stdout } = await execAsync(cmd, { cwd: project.path, timeout: 30000 });
       output = stdout;
     } catch (err: unknown) {
-      // These commands exit non-zero when outdated packages exist
-      const execErr = err as { stdout?: string };
+      // These commands exit non-zero when outdated packages exist, or may timeout
+      const execErr = err as { stdout?: string; killed?: boolean };
+      if (execErr.killed) {
+        console.warn(`Timeout scanning outdated for ${project.id}`);
+        return [];
+      }
       output = execErr.stdout || '{}';
     }
 
@@ -152,10 +156,14 @@ export async function scanVulnerabilities(
       : 'yarn audit --json';
 
     try {
-      const { stdout } = await execAsync(cmd, { cwd: project.path });
+      const { stdout } = await execAsync(cmd, { cwd: project.path, timeout: 30000 });
       output = stdout;
     } catch (err: unknown) {
-      const execErr = err as { stdout?: string };
+      const execErr = err as { stdout?: string; killed?: boolean };
+      if (execErr.killed) {
+        console.warn(`Timeout scanning vulnerabilities for ${project.id}`);
+        return [];
+      }
       output = execErr.stdout || '{}';
     }
 

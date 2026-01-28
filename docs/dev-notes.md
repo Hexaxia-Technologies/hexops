@@ -12,6 +12,10 @@
   - Previously `handleGitPush` and `handleGitPull` had `// Silently fail` error handling
   - Now displays actual error message (e.g., "Write access to repository not granted")
   - Also shows success toast on successful push/pull
+- **Fix:** Add 30s timeout to patch scanner exec calls to prevent infinite loading
+  - `pnpm outdated` and `pnpm audit` commands could hang indefinitely
+  - After extended runtime, stale caches expire and all 20 projects scan at once
+  - If any command hung, the entire `/api/patches` request would hang
 - **Fix:** Package Health section now properly handles held packages
   - Badge shows gray "N outdated (held)" when all outdated packages are on hold
   - Selection actions (Select All, Update) hidden when all outdated packages are held
