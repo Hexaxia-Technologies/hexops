@@ -182,8 +182,12 @@ export function PackageHealthSection({ projectId, projectName, initialOutdatedCo
   }
 
   // Use fetched count, or fall back to initial count from dashboard
-  const fetchedOutdatedCount = [...health.dependencies, ...health.devDependencies].filter(d => d.isOutdated).length;
+  const allOutdated = [...health.dependencies, ...health.devDependencies].filter(d => d.isOutdated);
+  const fetchedOutdatedCount = allOutdated.length;
   const outdatedCount = fetchedOutdatedCount > 0 ? fetchedOutdatedCount : (initialOutdatedCount ?? 0);
+  // Count non-held outdated packages (actionable)
+  const unheldOutdatedCount = allOutdated.filter(d => !holds.includes(d.name)).length;
+  const allOutdatedAreHeld = outdatedCount > 0 && unheldOutdatedCount === 0;
   const criticalVulns = health.vulnerabilities.filter(v => v.severity === 'critical' || v.severity === 'high').length;
 
   return (
@@ -199,8 +203,16 @@ export function PackageHealthSection({ projectId, projectName, initialOutdatedCo
           </div>
 
           {outdatedCount > 0 && (
-            <Badge variant="outline" className="text-xs border-yellow-500/50 text-yellow-400">
-              {outdatedCount} outdated
+            <Badge
+              variant="outline"
+              className={cn(
+                "text-xs",
+                allOutdatedAreHeld
+                  ? "border-zinc-600 text-zinc-500"
+                  : "border-yellow-500/50 text-yellow-400"
+              )}
+            >
+              {outdatedCount} outdated{allOutdatedAreHeld ? ' (held)' : ''}
             </Badge>
           )}
 
@@ -271,8 +283,8 @@ export function PackageHealthSection({ projectId, projectName, initialOutdatedCo
         </div>
       )}
 
-      {/* Selection Actions */}
-      {outdatedCount > 0 && (
+      {/* Selection Actions - only show if there are non-held outdated packages */}
+      {unheldOutdatedCount > 0 && (
         <div className="flex items-center justify-between bg-zinc-900/50 rounded px-3 py-2">
           <div className="flex items-center gap-2 text-sm">
             <span className="text-zinc-400">

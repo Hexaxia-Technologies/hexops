@@ -12,6 +12,10 @@
   - Previously `handleGitPush` and `handleGitPull` had `// Silently fail` error handling
   - Now displays actual error message (e.g., "Write access to repository not granted")
   - Also shows success toast on successful push/pull
+- **Fix:** Package Health section now properly handles held packages
+  - Badge shows gray "N outdated (held)" when all outdated packages are on hold
+  - Selection actions (Select All, Update) hidden when all outdated packages are held
+  - Previously showed yellow "N outdated" badge even when all were held (e.g., alyfe-v3 with only tailwindcss outdated and held)
 
 ### v0.6.0 (2026-01-25)
 - **Shell Panel** - Integrated terminal in the right sidebar
