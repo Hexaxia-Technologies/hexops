@@ -14,8 +14,13 @@ const CACHE_DIR = join(PATCHES_DIR, 'cache');
 const STATE_FILE = join(PATCHES_DIR, 'state.json');
 const HISTORY_FILE = join(PATCHES_DIR, 'history.json');
 
-// Cache TTL: 1 hour
-const CACHE_TTL_MS = 60 * 60 * 1000;
+// Cache TTL: 1 hour base + up to 15 min jitter to prevent thundering herd
+const CACHE_TTL_BASE_MS = 60 * 60 * 1000;
+const CACHE_TTL_JITTER_MS = 15 * 60 * 1000;
+
+function getCacheTTL(): number {
+  return CACHE_TTL_BASE_MS + Math.floor(Math.random() * CACHE_TTL_JITTER_MS);
+}
 
 /**
  * Ensure storage directories exist
@@ -165,7 +170,7 @@ export function createProjectCache(
   return {
     projectId,
     timestamp: now.toISOString(),
-    expiresAt: new Date(now.getTime() + CACHE_TTL_MS).toISOString(),
+    expiresAt: new Date(now.getTime() + getCacheTTL()).toISOString(),
     outdated,
     vulnerabilities,
   };

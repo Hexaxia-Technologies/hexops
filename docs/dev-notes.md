@@ -14,8 +14,10 @@
   - Also shows success toast on successful push/pull
 - **Fix:** Add 30s timeout to patch scanner exec calls to prevent infinite loading
   - `pnpm outdated` and `pnpm audit` commands could hang indefinitely
-  - After extended runtime, stale caches expire and all 20 projects scan at once
   - If any command hung, the entire `/api/patches` request would hang
+- **Fix:** Add jitter to cache TTL to prevent thundering herd
+  - All caches had same 1-hour TTL, expiring together and causing 20 simultaneous scans
+  - Now uses 1 hour base + 0-15 min random jitter so caches expire gradually
 - **Fix:** Package Health section now properly handles held packages
   - Badge shows gray "N outdated (held)" when all outdated packages are on hold
   - Selection actions (Select All, Update) hidden when all outdated packages are held
