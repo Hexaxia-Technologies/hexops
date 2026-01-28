@@ -396,12 +396,16 @@ export function ProjectDetail({
     setGitLoading('pull');
     try {
       const res = await fetch(`/api/projects/${project.id}/git-pull`, { method: 'POST' });
-      if (res.ok) {
+      const data = await res.json();
+      if (res.ok && data.success) {
+        toast.success('Pull completed');
         await fetchGitInfo();
         onRefresh(); // Update dashboard git status
+      } else {
+        toast.error(data.error || 'Pull failed');
       }
     } catch {
-      // Silently fail
+      toast.error('Failed to pull');
     } finally {
       setGitLoading(null);
     }
@@ -411,12 +415,16 @@ export function ProjectDetail({
     setGitLoading('push');
     try {
       const res = await fetch(`/api/projects/${project.id}/git-push`, { method: 'POST' });
-      if (res.ok) {
+      const data = await res.json();
+      if (res.ok && data.success) {
+        toast.success('Push completed');
         await fetchGitInfo();
         onRefresh(); // Update dashboard git status
+      } else {
+        toast.error(data.error || 'Push failed');
       }
     } catch {
-      // Silently fail
+      toast.error('Failed to push');
     } finally {
       setGitLoading(null);
     }

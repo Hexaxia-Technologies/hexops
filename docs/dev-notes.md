@@ -1,11 +1,17 @@
 # HexOps Development Notes
 
-**Current Version:** 0.6.0
+**Current Version:** 0.6.1
 **Purpose:** Internal development operations dashboard for managing Hexaxia project dev servers. Start/stop projects, view logs, manage patches, and monitor status from a single interface.
 
 ---
 
 ## Version History
+
+### v0.6.1 (2026-01-28)
+- **Fix:** Git push/pull now show toast error messages instead of silently failing
+  - Previously `handleGitPush` and `handleGitPull` had `// Silently fail` error handling
+  - Now displays actual error message (e.g., "Write access to repository not granted")
+  - Also shows success toast on successful push/pull
 
 ### v0.6.0 (2026-01-25)
 - **Shell Panel** - Integrated terminal in the right sidebar
