@@ -376,3 +376,4 @@ page.tsx
 - [ ] Log filtering and search
 - [ ] Environment variable viewer
 - [ ] Auto-update minor/patch dependencies on schedule
+- [ ] Enhanced patch error logging - show actual error message/output when patches fail, not just red indicator
