@@ -377,3 +377,4 @@ page.tsx
 - [ ] Environment variable viewer
 - [ ] Auto-update minor/patch dependencies on schedule
 - [ ] Enhanced patch error logging - show actual error message/output when patches fail, not just red indicator
+- [ ] Handle deprecated packages - currently shown as "outdated" but can't be updated (e.g., @types/dompurify). Should detect "Latest: Deprecated" and suggest removal instead of update
