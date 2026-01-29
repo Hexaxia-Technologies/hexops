@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { Sidebar } from '@/components/sidebar';
 import { ProjectList } from '@/components/project-list';
@@ -20,7 +21,8 @@ interface PatchStatus {
 
 type ViewMode = 'list' | 'detail';
 
-export default function Home() {
+function HomeContent() {
+  const searchParams = useSearchParams();
   const [projects, setProjects] = useState<Project[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -34,6 +36,15 @@ export default function Home() {
   const [showAddProject, setShowAddProject] = useState(false);
   const [patchStatus, setPatchStatus] = useState<PatchStatus | null>(null);
   const [projectsRoot, setProjectsRoot] = useState<string>('');
+
+  // Handle ?project=id query param to deep link to project detail
+  useEffect(() => {
+    const projectId = searchParams.get('project');
+    if (projectId) {
+      setDetailProjectId(projectId);
+      setViewMode('detail');
+    }
+  }, [searchParams]);
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -450,5 +461,17 @@ export default function Home() {
         categories={categories}
       />
     </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={
+      <div className="flex h-screen bg-zinc-950 items-center justify-center">
+        <div className="text-zinc-500">Loading...</div>
+      </div>
+    }>
+      <HomeContent />
+    </Suspense>
   );
 }

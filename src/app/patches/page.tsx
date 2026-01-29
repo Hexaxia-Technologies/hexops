@@ -8,7 +8,8 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Sidebar } from '@/components/sidebar';
 import { PatchesSidebar, type UpdateResult, type UpdateStatus } from '@/components/patches-sidebar';
 import { AddProjectDialog } from '@/components/add-project-dialog';
-import { RefreshCw, Shield, Package, ArrowUp, List, FolderTree, ChevronDown, ChevronRight, AlertTriangle, Link, PauseCircle, PlayCircle } from 'lucide-react';
+import { RefreshCw, Shield, Package, ArrowUp, List, FolderTree, ChevronDown, ChevronRight, AlertTriangle, Link as LinkIcon, PauseCircle, PlayCircle, ExternalLink } from 'lucide-react';
+import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import type { PatchQueueItem, PatchSummary } from '@/lib/types';
 import { generatePatchCommitMessage, type UpdatedPackage } from '@/lib/patch-commit-message';
@@ -962,6 +963,14 @@ export default function PatchesPage() {
                           <ChevronRight className="h-4 w-4 text-zinc-500" />
                         )}
                         <span className="font-medium text-zinc-200">{group.projectName}</span>
+                        <Link
+                          href={`/?project=${group.projectId}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-zinc-500 hover:text-zinc-300 transition-colors"
+                          title="View project details"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </Link>
                         <Badge variant="outline" className="text-xs border-zinc-700 text-zinc-500">
                           {group.patches.length} update{group.patches.length !== 1 ? 's' : ''}
                         </Badge>
@@ -1215,7 +1224,7 @@ function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject }: 
         {/* Dependency chain for transitive vulnerabilities */}
         {isTransitive && item.via && item.via.length > 0 && (
           <div className="flex items-center gap-1 mt-1 text-xs text-zinc-600">
-            <Link className="h-3 w-3" />
+            <LinkIcon className="h-3 w-3" />
             <span>via</span>
             {item.via.map((dep, idx) => (
               <span key={dep}>
