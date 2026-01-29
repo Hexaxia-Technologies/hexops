@@ -11,6 +11,7 @@ import {
 } from '@/lib/patch-storage';
 import { getUpdateType } from '@/lib/patch-scanner';
 import { invalidatePackageStatusCache } from '@/lib/extended-status';
+import { logger } from '@/lib/logger';
 import type { PatchHistoryEntry } from '@/lib/types';
 
 const execAsync = promisify(exec);
@@ -142,6 +143,17 @@ export async function POST(
             output,
           });
 
+          // Log to system logs
+          logger.info('patches', 'package_updated', `Updated ${pkg.name} to ${targetVersion}`, {
+            projectId: id,
+            meta: {
+              package: pkg.name,
+              fromVersion: pkg.fromVersion || 'unknown',
+              toVersion: targetVersion,
+              packageManager,
+            },
+          });
+
           // Log to history
           const historyEntry: PatchHistoryEntry = {
             id: generatePatchId(),
@@ -168,6 +180,17 @@ export async function POST(
             success: false,
             output,
             error,
+          });
+
+          // Log failure to system logs
+          logger.error('patches', 'package_update_failed', `Failed to update ${pkg.name}: ${error}`, {
+            projectId: id,
+            meta: {
+              package: pkg.name,
+              fromVersion: pkg.fromVersion || 'unknown',
+              toVersion: targetVersion,
+              error,
+            },
           });
 
           // Log failure to history

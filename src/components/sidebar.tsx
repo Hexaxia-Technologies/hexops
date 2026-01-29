@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Package, Plus, TerminalSquare } from 'lucide-react';
+import { Package, Plus, TerminalSquare, ScrollText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { APP_VERSION } from '@/lib/version';
 
@@ -120,6 +120,17 @@ export function Sidebar({
         >
           <Package className="h-4 w-4" />
           Patches
+        </Link>
+
+        <Link
+          href="/logs"
+          className={cn(
+            'w-full text-left px-3 py-2 rounded-md text-sm transition-colors flex items-center gap-2',
+            'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50'
+          )}
+        >
+          <ScrollText className="h-4 w-4" />
+          Logs
         </Link>
 
         {onOpenShell && (

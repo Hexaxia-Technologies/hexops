@@ -2,13 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getProject } from '@/lib/config';
 import { startProject, StartMode } from '@/lib/process-manager';
 import { checkPort } from '@/lib/port-checker';
+import { logger } from '@/lib/logger';
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params;
+
   try {
-    const { id } = await params;
     const project = getProject(id);
 
     if (!project) {
@@ -41,6 +43,13 @@ export async function POST(
     }
 
     const modeLabel = mode === 'prod' ? 'production' : 'development';
+
+    // Log success
+    logger.info('projects', 'project_started', `Started ${project.name} in ${modeLabel} mode`, {
+      projectId: id,
+      meta: { mode, port: project.port },
+    });
+
     return NextResponse.json({
       success: true,
       message: `Starting ${project.name} in ${modeLabel} mode on port ${project.port}`,
@@ -48,6 +57,14 @@ export async function POST(
     });
   } catch (error) {
     console.error('Error starting project:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Failed to start project';
+
+    // Log failure
+    logger.error('projects', 'project_start_failed', `Failed to start project: ${errorMessage}`, {
+      projectId: id,
+      meta: { error: errorMessage },
+    });
+
     return NextResponse.json(
       { error: 'Failed to start project' },
       { status: 500 }

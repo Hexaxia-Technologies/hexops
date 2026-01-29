@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getProject } from '@/lib/config';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { logger } from '@/lib/logger';
 
 const execFileAsync = promisify(execFile);
 
@@ -9,8 +10,9 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params;
+
   try {
-    const { id } = await params;
     const project = getProject(id);
 
     if (!project) {
@@ -60,15 +62,28 @@ export async function POST(
       { cwd, timeout: 30000 }
     );
 
+    // Log success
+    logger.info('git', 'commit_created', `Committed changes: ${message.split('\n')[0]}`, {
+      projectId: id,
+      meta: { message: message.split('\n')[0] },
+    });
+
     return NextResponse.json({
       success: true,
       output: stdout || stderr || 'Commit successful',
     });
   } catch (error) {
     console.error('Git commit failed:', error);
-    const message = error instanceof Error ? error.message : 'Git commit failed';
+    const errorMessage = error instanceof Error ? error.message : 'Git commit failed';
+
+    // Log failure
+    logger.error('git', 'commit_failed', `Commit failed: ${errorMessage}`, {
+      projectId: id,
+      meta: { error: errorMessage },
+    });
+
     return NextResponse.json(
-      { error: message },
+      { error: errorMessage },
       { status: 500 }
     );
   }
