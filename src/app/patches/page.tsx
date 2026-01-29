@@ -23,6 +23,7 @@ interface PatchesData {
   projectCount: number;
   categories: string[];
   projectCategories: Record<string, string>;  // projectId -> category
+  projectNames: Record<string, string>;  // projectId -> name
 }
 
 type FilterType = 'all' | 'vulns' | 'outdated';
@@ -192,14 +193,51 @@ export default function PatchesPage() {
       if (!res.ok) return null;
       const data = await res.json();
       return {
-        dirty: data.dirty ?? false,
-        ahead: data.ahead ?? 0,
-        behind: data.behind ?? 0,
+        dirty: data.isDirty ?? false,
+        ahead: data.aheadCount ?? 0,
+        behind: data.behindCount ?? 0,
       } as ProjectGitStatus;
     } catch {
       return null;
     }
   }, []);
+
+  // Fetch git status for all projects on load (to detect pending commits/pushes)
+  useEffect(() => {
+    if (!data) return;
+
+    const fetchAllGitStatuses = async () => {
+      const projectIds = Object.keys(data.projectCategories);
+      const statuses: Record<string, ProjectGitState> = {};
+
+      await Promise.all(
+        projectIds.map(async (projectId) => {
+          const gitStatus = await fetchProjectGitStatus(projectId);
+          if (gitStatus && (gitStatus.ahead > 0 || gitStatus.dirty)) {
+            statuses[projectId] = {
+              pendingCommit: null,
+              gitStatus,
+              isCommitting: false,
+              isPushing: false,
+            };
+          }
+        })
+      );
+
+      // Merge with existing states (don't overwrite active pending commits)
+      setProjectGitStates(prev => {
+        const merged = { ...statuses };
+        for (const [id, state] of Object.entries(prev)) {
+          if (state.pendingCommit || state.isCommitting || state.isPushing) {
+            merged[id] = state;
+          }
+        }
+        return merged;
+      });
+    };
+
+    fetchAllGitStatuses();
+  }, [data, fetchProjectGitStatus]);
 
   // Set pending commit for a project after updates
   const setPendingCommit = useCallback((
@@ -423,26 +461,40 @@ export default function PatchesPage() {
     });
   }, [data, filter, selectedCategory, showUnfixable, showHeld]);
 
-  // Group by project for grouped view
+  // Group by project for grouped view - show ALL projects
   const groupedByProject = useMemo((): ProjectGroup[] => {
+    if (!data) return [];
+
     const groups = new Map<string, ProjectGroup>();
 
-    for (const item of filteredQueue) {
-      if (!groups.has(item.projectId)) {
-        groups.set(item.projectId, {
-          projectId: item.projectId,
-          projectName: item.projectName,
-          patches: [],
-          isExpanded: expandedProjects.has(item.projectId),
-        });
+    // Initialize all projects (so they all appear even with 0 patches)
+    for (const [projectId, projectName] of Object.entries(data.projectNames)) {
+      // Apply category filter
+      if (selectedCategory && selectedCategory !== 'running' && selectedCategory !== 'stopped') {
+        const itemCategory = data.projectCategories[projectId];
+        if (itemCategory !== selectedCategory) continue;
       }
-      groups.get(item.projectId)!.patches.push(item);
+
+      groups.set(projectId, {
+        projectId,
+        projectName,
+        patches: [],
+        isExpanded: expandedProjects.has(projectId),
+      });
+    }
+
+    // Add patches to their projects
+    for (const item of filteredQueue) {
+      const group = groups.get(item.projectId);
+      if (group) {
+        group.patches.push(item);
+      }
     }
 
     return Array.from(groups.values()).sort((a, b) =>
       a.projectName.localeCompare(b.projectName)
     );
-  }, [filteredQueue, expandedProjects]);
+  }, [data, filteredQueue, expandedProjects, selectedCategory]);
 
   const toggleProjectExpanded = (projectId: string) => {
     setExpandedProjects(prev => {
@@ -955,12 +1007,16 @@ export default function PatchesPage() {
                     <div className="flex items-center gap-3 flex-1">
                       <button
                         className="flex items-center gap-3"
-                        onClick={() => toggleProjectExpanded(group.projectId)}
+                        onClick={() => group.patches.length > 0 && toggleProjectExpanded(group.projectId)}
                       >
-                        {expandedProjects.has(group.projectId) ? (
-                          <ChevronDown className="h-4 w-4 text-zinc-500" />
+                        {group.patches.length > 0 ? (
+                          expandedProjects.has(group.projectId) ? (
+                            <ChevronDown className="h-4 w-4 text-zinc-500" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4 text-zinc-500" />
+                          )
                         ) : (
-                          <ChevronRight className="h-4 w-4 text-zinc-500" />
+                          <div className="w-4" /> /* Spacer when no patches */
                         )}
                         <span className="font-medium text-zinc-200">{group.projectName}</span>
                         <Link
@@ -971,26 +1027,34 @@ export default function PatchesPage() {
                         >
                           <ExternalLink className="h-3.5 w-3.5" />
                         </Link>
-                        <Badge variant="outline" className="text-xs border-zinc-700 text-zinc-500">
-                          {group.patches.length} update{group.patches.length !== 1 ? 's' : ''}
-                        </Badge>
+                        {group.patches.length > 0 ? (
+                          <Badge variant="outline" className="text-xs border-zinc-700 text-zinc-500">
+                            {group.patches.length} update{group.patches.length !== 1 ? 's' : ''}
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-xs border-green-500/30 text-green-400 bg-green-500/10">
+                            ✓ All patched
+                          </Badge>
+                        )}
                       </button>
-                      {/* Select All / Deselect All - now on left after patch count */}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 text-xs text-zinc-400 hover:text-zinc-200"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (selectionState === 'all') {
-                            deselectAllInProject(group.projectId);
-                          } else {
-                            selectAllInProject(group.projectId);
-                          }
-                        }}
-                      >
-                        {selectionState === 'all' ? 'Deselect All' : 'Select All'}
-                      </Button>
+                      {/* Select All / Deselect All - only show when there are patches */}
+                      {group.patches.length > 0 && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs text-zinc-400 hover:text-zinc-200"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (selectionState === 'all') {
+                              deselectAllInProject(group.projectId);
+                            } else {
+                              selectAllInProject(group.projectId);
+                            }
+                          }}
+                        >
+                          {selectionState === 'all' ? 'Deselect All' : 'Select All'}
+                        </Button>
+                      )}
                     </div>
                     {/* Right side: git controls */}
                     <div className="flex items-center gap-2">

@@ -53,6 +53,7 @@ export async function POST(_request: NextRequest) {
       projectCount: projects.length,
       categories,
       projectCategories,
+      projectNames: projectMap,  // Map projectId -> name for display
       scannedCount: validCaches.length,
       failedProjects,
     });

@@ -50,6 +50,7 @@ export async function GET(_request: NextRequest) {
       projectCount: projects.length,
       categories,
       projectCategories,  // Map projectId -> category for filtering
+      projectNames: projectMap,  // Map projectId -> name for display
     }, {
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate',
