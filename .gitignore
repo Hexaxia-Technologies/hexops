@@ -40,5 +40,16 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# HexOps logs
-.hexops/logs/
+# HexOps private files
+hexops.config.json
+.hexops/
+
+# Development tools (private)
+.serena/
+.claude/
+.pnpm-approved-builds
+
+# Private documentation
+docs/dev-notes.md
+docs/plans/
+docs/PRD.md
