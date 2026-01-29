@@ -21,7 +21,6 @@ export function loadConfig(): HexOpsConfig {
   } catch (error) {
     console.error('Failed to load hexops.config.json:', error);
     return {
-      projectsRoot: process.cwd(),
       projects: [],
       categories: [],
     };
@@ -43,7 +42,7 @@ export function getCategories(): string[] {
 
 export function getProjectsRoot(): string {
   const config = loadConfig();
-  return config.projectsRoot || process.cwd();
+  return config.settings?.paths?.projectsRoot || process.cwd();
 }
 
 export function reloadConfig(): HexOpsConfig {

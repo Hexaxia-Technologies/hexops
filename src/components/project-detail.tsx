@@ -46,6 +46,7 @@ import { GitSection } from './detail-sections/git-section';
 import { PackageHealthSection } from './detail-sections/package-health-section';
 import { PatchHistorySection } from './detail-sections/patch-history-section';
 import { SystemLogsSection } from './detail-sections/system-logs-section';
+import { SettingsSection } from './detail-sections/settings-section';
 
 interface ProjectDetailProps {
   project: Project;
@@ -1068,6 +1069,10 @@ export function ProjectDetail({
 
         <CollapsibleSection title="Activity Log">
           <SystemLogsSection projectId={project.id} />
+        </CollapsibleSection>
+
+        <CollapsibleSection title="Settings">
+          <SettingsSection projectId={project.id} />
         </CollapsibleSection>
       </div>
 

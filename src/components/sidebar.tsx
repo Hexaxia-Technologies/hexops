@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Package, Plus, TerminalSquare, ScrollText, LayoutDashboard } from 'lucide-react';
+import { Package, Plus, TerminalSquare, ScrollText, LayoutDashboard, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { APP_VERSION } from '@/lib/version';
 import { useSidebar } from '@/contexts/sidebar-context';
@@ -155,6 +155,17 @@ export function Sidebar({
             Shell
           </button>
         )}
+
+        <Link
+          href="/settings"
+          className={cn(
+            'w-full text-left px-3 py-2 rounded-md text-sm transition-colors flex items-center gap-2',
+            'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50'
+          )}
+        >
+          <Settings className="h-4 w-4" />
+          Settings
+        </Link>
       </nav>
 
       <div className="pt-4 border-t border-zinc-800 space-y-1">

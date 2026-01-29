@@ -1,11 +1,27 @@
 # HexOps Development Notes
 
-**Current Version:** 0.8.1
+**Current Version:** 0.9.0
 **Purpose:** Internal development operations dashboard for managing Hexaxia project dev servers. Start/stop projects, view logs, manage patches, and monitor status from a single interface.
 
 ---
 
 ## Version History
+
+### v0.9.0 (2026-01-29)
+- **Feature:** Global Settings page (`/settings`)
+  - System Paths: projectsRoot, logs directory, cache directory
+  - Git Defaults: default branch, commit prefix, auto-push after commit
+  - Vercel Integration: API token, team ID, connection verification
+  - Accessible from sidebar (gear icon)
+- **Feature:** Per-project Settings section in project detail page
+  - Environment: custom env vars, Node version override, shell selection
+  - Git Behavior: auto-pull on start, commit template, preferred branch
+  - Deploy: Vercel project ID, auto-deploy branch, default environment
+  - Monitoring: health check URL, restart on crash, log retention days
+- **Data:** Settings stored in `hexops.config.json`
+  - Global settings in `settings` key
+  - Project settings in each project's `settings` key
+  - Deep merge with defaults for missing values
 
 ### v0.8.1 (2026-01-29)
 - **Feature:** Static sidebar architecture - sidebar no longer reloads on page navigation

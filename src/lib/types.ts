@@ -11,6 +11,7 @@ export interface ProjectConfig {
     [key: string]: string;
   };
   holds?: string[];  // Package names on hold (excluded from updates)
+  settings?: Partial<ProjectSettings>;  // Per-project settings overrides
 }
 
 export interface ProjectExtendedStatus {
@@ -36,8 +37,50 @@ export interface Project extends ProjectConfig {
   extended?: ProjectExtendedStatus;
 }
 
+// Settings Types
+
+export interface GlobalSettings {
+  paths: {
+    projectsRoot: string;
+    logsDir: string;
+    cacheDir: string;
+  };
+  integrations: {
+    vercel: {
+      token: string | null;
+      teamId: string | null;
+    };
+    git: {
+      defaultBranch: string;
+      commitPrefix: string;
+      pushAfterCommit: boolean;
+    };
+  };
+}
+
+export interface ProjectSettings {
+  env: Record<string, string>;
+  nodeVersion: string | null;
+  shell: 'bash' | 'zsh' | 'system' | null;
+  git: {
+    autoPull: boolean;
+    commitTemplate: string | null;
+    branch: string | null;
+  };
+  deploy: {
+    vercelProjectId: string | null;
+    autoDeployBranch: string | null;
+    environment: 'preview' | 'production';
+  };
+  monitoring: {
+    healthCheckUrl: string | null;
+    restartOnCrash: boolean;
+    logRetentionDays: number;
+  };
+}
+
 export interface HexOpsConfig {
-  projectsRoot?: string;
+  settings?: GlobalSettings;
   projects: ProjectConfig[];
   categories: string[];
 }
