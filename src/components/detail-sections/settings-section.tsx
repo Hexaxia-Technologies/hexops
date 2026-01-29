@@ -127,10 +127,11 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
       const res = await fetch(`/api/projects/${projectId}/settings`);
       const data = await res.json();
       setSettings(data);
-      setOriginalSettings(data);
+      // Deep clone for original to avoid reference issues
+      setOriginalSettings(JSON.parse(JSON.stringify(data)));
       const entries = Object.entries(data.env || {}) as [string, string][];
       setEnvEntries(entries);
-      setOriginalEnvEntries(entries);
+      setOriginalEnvEntries(JSON.parse(JSON.stringify(entries)));
     } catch (error) {
       console.error('Failed to fetch project settings:', error);
       toast.error('Failed to load project settings');
@@ -161,10 +162,11 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
       if (res.ok) {
         const updated = await res.json();
         setSettings(updated);
-        setOriginalSettings(updated);
+        // Deep clone for original to avoid reference issues
+        setOriginalSettings(JSON.parse(JSON.stringify(updated)));
         const entries = Object.entries(updated.env || {}) as [string, string][];
         setEnvEntries(entries);
-        setOriginalEnvEntries(entries);
+        setOriginalEnvEntries(JSON.parse(JSON.stringify(entries)));
         toast.success('Settings saved');
       } else {
         toast.error('Failed to save settings');
@@ -180,8 +182,9 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
   // Discard changes
   const handleDiscard = () => {
     if (originalSettings) {
-      setSettings(originalSettings);
-      setEnvEntries(originalEnvEntries);
+      // Deep clone to avoid reference issues
+      setSettings(JSON.parse(JSON.stringify(originalSettings)));
+      setEnvEntries(JSON.parse(JSON.stringify(originalEnvEntries)));
       toast.info('Changes discarded');
     }
   };

@@ -139,7 +139,8 @@ export default function SettingsPage() {
       const res = await fetch('/api/settings');
       const data = await res.json();
       setSettings(data);
-      setOriginalSettings(data);
+      // Deep clone for original to avoid reference issues
+      setOriginalSettings(JSON.parse(JSON.stringify(data)));
     } catch (error) {
       console.error('Failed to fetch settings:', error);
       toast.error('Failed to load settings');
@@ -167,7 +168,8 @@ export default function SettingsPage() {
       if (res.ok) {
         const updated = await res.json();
         setSettings(updated);
-        setOriginalSettings(updated);
+        // Deep clone for original to avoid reference issues
+        setOriginalSettings(JSON.parse(JSON.stringify(updated)));
         toast.success('Settings saved');
       } else {
         toast.error('Failed to save settings');
@@ -183,7 +185,8 @@ export default function SettingsPage() {
   // Discard changes
   const handleDiscard = () => {
     if (originalSettings) {
-      setSettings(originalSettings);
+      // Deep clone to avoid reference issues
+      setSettings(JSON.parse(JSON.stringify(originalSettings)));
       toast.info('Changes discarded');
     }
   };
