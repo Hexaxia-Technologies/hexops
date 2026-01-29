@@ -11,6 +11,9 @@ import { AddProjectDialog } from '@/components/add-project-dialog';
 import { RefreshCw, Shield, Package, ArrowUp, List, FolderTree, ChevronDown, ChevronRight, AlertTriangle, Link, PauseCircle, PlayCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { PatchQueueItem, PatchSummary } from '@/lib/types';
+import { generatePatchCommitMessage, type UpdatedPackage } from '@/lib/patch-commit-message';
+import { GitCommit, Upload, Pencil, X } from 'lucide-react';
+import { Textarea } from '@/components/ui/textarea';
 
 interface PatchesData {
   queue: PatchQueueItem[];
@@ -24,6 +27,45 @@ interface PatchesData {
 type FilterType = 'all' | 'vulns' | 'outdated';
 type ViewMode = 'flat' | 'grouped';
 
+// localStorage persistence
+const PREFS_KEY = 'hexops-patches-preferences';
+
+interface PatchesPreferences {
+  viewMode: ViewMode;
+  showUnfixable: boolean;
+  showHeld: boolean;
+}
+
+const DEFAULT_PREFS: PatchesPreferences = {
+  viewMode: 'grouped',  // Default to grouped view
+  showUnfixable: true,
+  showHeld: true,
+};
+
+function loadPreferences(): PatchesPreferences {
+  if (typeof window === 'undefined') return DEFAULT_PREFS;
+  try {
+    const stored = localStorage.getItem(PREFS_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      return { ...DEFAULT_PREFS, ...parsed };
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return DEFAULT_PREFS;
+}
+
+function savePreferences(prefs: Partial<PatchesPreferences>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const current = loadPreferences();
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ ...current, ...prefs }));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 interface ProjectGroup {
   projectId: string;
   projectName: string;
@@ -31,12 +73,32 @@ interface ProjectGroup {
   isExpanded: boolean;
 }
 
+// Per-project git state for commit/push flow
+interface PendingCommit {
+  packages: UpdatedPackage[];
+  message: string;
+  isEditing: boolean;
+}
+
+interface ProjectGitStatus {
+  dirty: boolean;
+  ahead: number;
+  behind: number;
+}
+
+interface ProjectGitState {
+  pendingCommit: PendingCommit | null;
+  gitStatus: ProjectGitStatus | null;
+  isCommitting: boolean;
+  isPushing: boolean;
+}
+
 export default function PatchesPage() {
   const [data, setData] = useState<PatchesData | null>(null);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [filter, setFilter] = useState<FilterType>('all');
-  const [viewMode, setViewMode] = useState<ViewMode>('flat');
+  const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_PREFS.viewMode);
   const [selectedPackages, setSelectedPackages] = useState<Set<string>>(new Set());
   const [updating, setUpdating] = useState(false);
   const [showAddProject, setShowAddProject] = useState(false);
@@ -44,8 +106,11 @@ export default function PatchesPage() {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [recentUpdates, setRecentUpdates] = useState<UpdateResult[]>([]);
-  const [showUnfixable, setShowUnfixable] = useState(true); // Show unfixable vulnerabilities
-  const [showHeld, setShowHeld] = useState(true); // Show held packages
+  const [showUnfixable, setShowUnfixable] = useState(DEFAULT_PREFS.showUnfixable);
+  const [showHeld, setShowHeld] = useState(DEFAULT_PREFS.showHeld);
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
+  // Per-project git state for commit/push flow
+  const [projectGitStates, setProjectGitStates] = useState<Record<string, ProjectGitState>>({});
 
   const fetchPatches = useCallback(async (bustCache = false) => {
     try {
@@ -102,6 +167,180 @@ export default function PatchesPage() {
     fetchPatches();
     fetchHistory();
   }, [fetchPatches, fetchHistory]);
+
+  // Load preferences from localStorage on mount
+  useEffect(() => {
+    const prefs = loadPreferences();
+    setViewMode(prefs.viewMode);
+    setShowUnfixable(prefs.showUnfixable);
+    setShowHeld(prefs.showHeld);
+    setPrefsLoaded(true);
+  }, []);
+
+  // Save preferences when they change (after initial load)
+  useEffect(() => {
+    if (prefsLoaded) {
+      savePreferences({ viewMode, showUnfixable, showHeld });
+    }
+  }, [viewMode, showUnfixable, showHeld, prefsLoaded]);
+
+  // Fetch git status for a project
+  const fetchProjectGitStatus = useCallback(async (projectId: string) => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/git`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      return {
+        dirty: data.dirty ?? false,
+        ahead: data.ahead ?? 0,
+        behind: data.behind ?? 0,
+      } as ProjectGitStatus;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // Set pending commit for a project after updates
+  const setPendingCommit = useCallback((
+    projectId: string,
+    packages: UpdatedPackage[]
+  ) => {
+    const { full: message } = generatePatchCommitMessage(packages);
+    setProjectGitStates(prev => ({
+      ...prev,
+      [projectId]: {
+        ...prev[projectId],
+        pendingCommit: { packages, message, isEditing: false },
+        isCommitting: false,
+        isPushing: false,
+      },
+    }));
+    // Fetch git status for this project
+    fetchProjectGitStatus(projectId).then(gitStatus => {
+      setProjectGitStates(prev => ({
+        ...prev,
+        [projectId]: { ...prev[projectId], gitStatus },
+      }));
+    });
+  }, [fetchProjectGitStatus]);
+
+  // Dismiss pending commit
+  const dismissPendingCommit = useCallback((projectId: string) => {
+    setProjectGitStates(prev => ({
+      ...prev,
+      [projectId]: { ...prev[projectId], pendingCommit: null },
+    }));
+  }, []);
+
+  // Update commit message
+  const updateCommitMessage = useCallback((projectId: string, message: string) => {
+    setProjectGitStates(prev => ({
+      ...prev,
+      [projectId]: {
+        ...prev[projectId],
+        pendingCommit: prev[projectId]?.pendingCommit
+          ? { ...prev[projectId].pendingCommit!, message }
+          : null,
+      },
+    }));
+  }, []);
+
+  // Toggle edit mode for commit message
+  const toggleCommitEditMode = useCallback((projectId: string) => {
+    setProjectGitStates(prev => ({
+      ...prev,
+      [projectId]: {
+        ...prev[projectId],
+        pendingCommit: prev[projectId]?.pendingCommit
+          ? { ...prev[projectId].pendingCommit!, isEditing: !prev[projectId].pendingCommit!.isEditing }
+          : null,
+      },
+    }));
+  }, []);
+
+  // Handle commit
+  const handleCommit = useCallback(async (projectId: string) => {
+    const state = projectGitStates[projectId];
+    if (!state?.pendingCommit) return;
+
+    setProjectGitStates(prev => ({
+      ...prev,
+      [projectId]: { ...prev[projectId], isCommitting: true },
+    }));
+
+    try {
+      const res = await fetch(`/api/projects/${projectId}/git-commit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: state.pendingCommit.message }),
+      });
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        toast.success('Changes committed');
+        // Clear pending commit and refresh git status
+        const gitStatus = await fetchProjectGitStatus(projectId);
+        setProjectGitStates(prev => ({
+          ...prev,
+          [projectId]: {
+            ...prev[projectId],
+            pendingCommit: null,
+            gitStatus,
+            isCommitting: false,
+          },
+        }));
+      } else {
+        toast.error(data.error || 'Commit failed');
+        setProjectGitStates(prev => ({
+          ...prev,
+          [projectId]: { ...prev[projectId], isCommitting: false },
+        }));
+      }
+    } catch {
+      toast.error('Failed to commit');
+      setProjectGitStates(prev => ({
+        ...prev,
+        [projectId]: { ...prev[projectId], isCommitting: false },
+      }));
+    }
+  }, [projectGitStates, fetchProjectGitStatus]);
+
+  // Handle push
+  const handlePush = useCallback(async (projectId: string) => {
+    setProjectGitStates(prev => ({
+      ...prev,
+      [projectId]: { ...prev[projectId], isPushing: true },
+    }));
+
+    try {
+      const res = await fetch(`/api/projects/${projectId}/git-push`, {
+        method: 'POST',
+      });
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        toast.success('Pushed to remote');
+        // Refresh git status
+        const gitStatus = await fetchProjectGitStatus(projectId);
+        setProjectGitStates(prev => ({
+          ...prev,
+          [projectId]: { ...prev[projectId], gitStatus, isPushing: false },
+        }));
+      } else {
+        toast.error(data.error || 'Push failed');
+        setProjectGitStates(prev => ({
+          ...prev,
+          [projectId]: { ...prev[projectId], isPushing: false },
+        }));
+      }
+    } catch {
+      toast.error('Failed to push');
+      setProjectGitStates(prev => ({
+        ...prev,
+        [projectId]: { ...prev[projectId], isPushing: false },
+      }));
+    }
+  }, [fetchProjectGitStatus]);
 
   const handleScan = async () => {
     setScanning(true);
@@ -396,6 +635,32 @@ export default function PatchesPage() {
       toast.warning(`${successCount} succeeded, ${failCount} failed`);
     }
 
+    // Set pending commits for projects with successful updates
+    const successfulByProject = new Map<string, UpdatedPackage[]>();
+    for (const result of newResults) {
+      if (result.success) {
+        if (!successfulByProject.has(result.projectId)) {
+          successfulByProject.set(result.projectId, []);
+        }
+        // Check if this was a security fix (look up from selectedItems)
+        const originalItem = selectedItems.find(
+          item => item.projectId === result.projectId && item.package === result.packageName
+        );
+        successfulByProject.get(result.projectId)!.push({
+          name: result.packageName,
+          fromVersion: result.fromVersion,
+          toVersion: result.toVersion,
+          isSecurityFix: originalItem?.type === 'vulnerability',
+          vulnCount: originalItem?.type === 'vulnerability' ? 1 : undefined,
+        });
+      }
+    }
+
+    // Create pending commits for each project
+    for (const [projectId, packages] of successfulByProject) {
+      setPendingCommit(projectId, packages);
+    }
+
     // Refresh data with cache busting to get fresh scan results
     fetchPatches(true);
   };
@@ -684,38 +949,146 @@ export default function PatchesPage() {
                 return (
                 <div key={group.projectId} className="border border-zinc-800 rounded-lg overflow-hidden">
                   {/* Project Header */}
-                  <div className="flex items-center bg-zinc-900/50 hover:bg-zinc-900 transition-colors">
-                    <button
-                      className="flex-1 flex items-center gap-3 px-4 py-3"
-                      onClick={() => toggleProjectExpanded(group.projectId)}
-                    >
-                      {expandedProjects.has(group.projectId) ? (
-                        <ChevronDown className="h-4 w-4 text-zinc-500" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4 text-zinc-500" />
-                      )}
-                      <span className="font-medium text-zinc-200">{group.projectName}</span>
-                      <Badge variant="outline" className="text-xs border-zinc-700 text-zinc-500">
-                        {group.patches.length} update{group.patches.length !== 1 ? 's' : ''}
-                      </Badge>
-                    </button>
-                    {/* Select All / Deselect All for this project */}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 text-xs text-zinc-400 hover:text-zinc-200"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (selectionState === 'all') {
-                          deselectAllInProject(group.projectId);
-                        } else {
-                          selectAllInProject(group.projectId);
-                        }
-                      }}
-                    >
-                      {selectionState === 'all' ? 'Deselect All' : selectionState === 'some' ? 'Select All' : 'Select All'}
-                    </Button>
+                  <div className="flex items-center bg-zinc-900/50 hover:bg-zinc-900 transition-colors px-4 py-3">
+                    {/* Left side: expand toggle, name, count, select all */}
+                    <div className="flex items-center gap-3 flex-1">
+                      <button
+                        className="flex items-center gap-3"
+                        onClick={() => toggleProjectExpanded(group.projectId)}
+                      >
+                        {expandedProjects.has(group.projectId) ? (
+                          <ChevronDown className="h-4 w-4 text-zinc-500" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-zinc-500" />
+                        )}
+                        <span className="font-medium text-zinc-200">{group.projectName}</span>
+                        <Badge variant="outline" className="text-xs border-zinc-700 text-zinc-500">
+                          {group.patches.length} update{group.patches.length !== 1 ? 's' : ''}
+                        </Badge>
+                      </button>
+                      {/* Select All / Deselect All - now on left after patch count */}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-xs text-zinc-400 hover:text-zinc-200"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (selectionState === 'all') {
+                            deselectAllInProject(group.projectId);
+                          } else {
+                            selectAllInProject(group.projectId);
+                          }
+                        }}
+                      >
+                        {selectionState === 'all' ? 'Deselect All' : 'Select All'}
+                      </Button>
+                    </div>
+                    {/* Right side: git controls */}
+                    <div className="flex items-center gap-2">
+                      {(() => {
+                        const gitState = projectGitStates[group.projectId];
+                        const hasPendingCommit = !!gitState?.pendingCommit;
+                        const ahead = gitState?.gitStatus?.ahead ?? 0;
+                        return (
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className={cn(
+                                'h-7 text-xs',
+                                hasPendingCommit
+                                  ? 'text-green-400 hover:text-green-300 hover:bg-green-500/10'
+                                  : 'text-zinc-600'
+                              )}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (hasPendingCommit) handleCommit(group.projectId);
+                              }}
+                              disabled={!hasPendingCommit || gitState?.isCommitting}
+                            >
+                              <GitCommit className={cn('h-3.5 w-3.5 mr-1', gitState?.isCommitting && 'animate-pulse')} />
+                              {gitState?.isCommitting ? 'Committing...' : 'Commit'}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className={cn(
+                                'h-7 text-xs',
+                                ahead > 0
+                                  ? 'text-blue-400 hover:text-blue-300 hover:bg-blue-500/10'
+                                  : 'text-zinc-600'
+                              )}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (ahead > 0) handlePush(group.projectId);
+                              }}
+                              disabled={ahead === 0 || gitState?.isPushing}
+                            >
+                              <Upload className={cn('h-3.5 w-3.5 mr-1', gitState?.isPushing && 'animate-pulse')} />
+                              {gitState?.isPushing ? 'Pushing...' : ahead > 0 ? `Push (${ahead}↑)` : 'Push'}
+                            </Button>
+                          </>
+                        );
+                      })()}
+                    </div>
                   </div>
+
+                  {/* Inline Commit UI - shows after patches are applied */}
+                  {(() => {
+                    const gitState = projectGitStates[group.projectId];
+                    if (!gitState?.pendingCommit) return null;
+                    const { packages, message, isEditing } = gitState.pendingCommit;
+                    const securityCount = packages.filter(p => p.isSecurityFix).length;
+                    const summary = securityCount > 0
+                      ? `Updated ${packages.length} packages (${securityCount} security fix${securityCount !== 1 ? 'es' : ''})`
+                      : `Updated ${packages.length} package${packages.length !== 1 ? 's' : ''}`;
+
+                    return (
+                      <div className="border-t border-zinc-800 bg-zinc-900/30 px-4 py-3">
+                        <div className="flex items-start gap-3">
+                          <div className="text-green-400 mt-0.5">✓</div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-zinc-300">{summary}</p>
+                            {isEditing ? (
+                              <Textarea
+                                value={message}
+                                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => updateCommitMessage(group.projectId, e.target.value)}
+                                className="mt-2 font-mono text-xs min-h-[100px]"
+                                placeholder="Commit message..."
+                              />
+                            ) : (
+                              <div className="mt-2 bg-zinc-800 rounded px-3 py-2 font-mono text-xs text-zinc-300 whitespace-pre-wrap border border-zinc-700">
+                                {message.split('\n').slice(0, 1).join('')}
+                                {message.split('\n').length > 1 && (
+                                  <span className="text-zinc-500"> ...</span>
+                                )}
+                              </div>
+                            )}
+                            <div className="flex items-center gap-2 mt-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs text-zinc-400 hover:text-zinc-200"
+                                onClick={() => toggleCommitEditMode(group.projectId)}
+                              >
+                                <Pencil className="h-3 w-3 mr-1" />
+                                {isEditing ? 'Done' : 'Edit'}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs text-zinc-500 hover:text-zinc-300"
+                                onClick={() => dismissPendingCommit(group.projectId)}
+                              >
+                                <X className="h-3 w-3 mr-1" />
+                                Dismiss
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {/* Project Patches */}
                   {expandedProjects.has(group.projectId) && (

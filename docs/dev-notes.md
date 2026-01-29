@@ -1,11 +1,29 @@
 # HexOps Development Notes
 
-**Current Version:** 0.6.1
+**Current Version:** 0.7.0
 **Purpose:** Internal development operations dashboard for managing Hexaxia project dev servers. Start/stop projects, view logs, manage patches, and monitor status from a single interface.
 
 ---
 
 ## Version History
+
+### v0.7.0 (2026-01-29)
+- **Feature:** Patches dashboard now defaults to grouped view
+- **Feature:** User preferences (view mode, show unfixable, show held) persist to localStorage
+  - Key: `hexops-patches-preferences`
+  - Filters (category, type) reset each session intentionally
+- **Feature:** Rearranged project card header in grouped view
+  - Select All moved to left (after patch count)
+  - Git controls (Commit/Push) added on far right
+- **Feature:** Inline commit UI after patches are applied
+  - Shows summary of updated packages with security fixes highlighted
+  - Auto-generated commit message in conventional format
+  - Editable commit message via Edit button
+  - Dismiss to clear without committing
+- **Feature:** Per-project git controls in patches view
+  - Commit button enabled when uncommitted patch changes exist
+  - Push button shows ahead count (e.g., "Push (1↑)")
+  - Loading states during commit/push operations
 
 ### v0.6.1 (2026-01-28)
 - **Fix:** Git push/pull now show toast error messages instead of silently failing
