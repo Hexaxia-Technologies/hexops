@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { Plus, Trash2, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Loader2, Save } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import type { ProjectSettings } from '@/lib/types';
 
 interface SettingsSectionProps {
@@ -15,12 +16,11 @@ interface FieldProps {
   description?: string;
   value: string;
   onChange: (value: string) => void;
-  onBlur?: () => void;
   placeholder?: string;
   type?: 'text' | 'number';
 }
 
-function Field({ label, description, value, onChange, onBlur, placeholder, type = 'text' }: FieldProps) {
+function Field({ label, description, value, onChange, placeholder, type = 'text' }: FieldProps) {
   return (
     <div className="space-y-1">
       <label className="text-xs font-medium text-zinc-400">{label}</label>
@@ -29,7 +29,6 @@ function Field({ label, description, value, onChange, onBlur, placeholder, type 
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        onBlur={onBlur}
         placeholder={placeholder}
         className="w-full px-2 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none focus:ring-1 focus:ring-purple-500/50 focus:border-purple-500"
       />
@@ -111,9 +110,16 @@ function SubsectionHeader({ title }: { title: string }) {
 
 export function SettingsSection({ projectId }: SettingsSectionProps) {
   const [settings, setSettings] = useState<ProjectSettings | null>(null);
+  const [originalSettings, setOriginalSettings] = useState<ProjectSettings | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [envEntries, setEnvEntries] = useState<[string, string][]>([]);
+  const [originalEnvEntries, setOriginalEnvEntries] = useState<[string, string][]>([]);
+
+  // Check if settings have changed
+  const isDirty = (settings && originalSettings
+    ? JSON.stringify(settings) !== JSON.stringify(originalSettings)
+    : false) || JSON.stringify(envEntries) !== JSON.stringify(originalEnvEntries);
 
   // Fetch settings
   const fetchSettings = useCallback(async () => {
@@ -121,7 +127,10 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
       const res = await fetch(`/api/projects/${projectId}/settings`);
       const data = await res.json();
       setSettings(data);
-      setEnvEntries(Object.entries(data.env || {}));
+      setOriginalSettings(data);
+      const entries = Object.entries(data.env || {}) as [string, string][];
+      setEnvEntries(entries);
+      setOriginalEnvEntries(entries);
     } catch (error) {
       console.error('Failed to fetch project settings:', error);
       toast.error('Failed to load project settings');
@@ -135,20 +144,27 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
   }, [fetchSettings]);
 
   // Save settings
-  const saveSettings = async (partial: Partial<ProjectSettings>) => {
-    if (!settings) return;
+  const handleSave = async () => {
+    if (!settings || !isDirty) return;
 
     setIsSaving(true);
     try {
+      // Build env from entries
+      const env = Object.fromEntries(envEntries.filter(([k]) => k.trim()));
+
       const res = await fetch(`/api/projects/${projectId}/settings`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(partial),
+        body: JSON.stringify({ ...settings, env }),
       });
 
       if (res.ok) {
         const updated = await res.json();
         setSettings(updated);
+        setOriginalSettings(updated);
+        const entries = Object.entries(updated.env || {}) as [string, string][];
+        setEnvEntries(entries);
+        setOriginalEnvEntries(entries);
         toast.success('Settings saved');
       } else {
         toast.error('Failed to save settings');
@@ -158,6 +174,15 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
       toast.error('Failed to save settings');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  // Discard changes
+  const handleDiscard = () => {
+    if (originalSettings) {
+      setSettings(originalSettings);
+      setEnvEntries(originalEnvEntries);
+      toast.info('Changes discarded');
     }
   };
 
@@ -200,14 +225,6 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
   const removeEnvVar = (index: number) => {
     const newEntries = envEntries.filter((_, i) => i !== index);
     setEnvEntries(newEntries);
-    // Save immediately when removing
-    const env = Object.fromEntries(newEntries.filter(([k]) => k.trim()));
-    saveSettings({ env });
-  };
-
-  const saveEnvVars = () => {
-    const env = Object.fromEntries(envEntries.filter(([k]) => k.trim()));
-    saveSettings({ env });
   };
 
   if (isLoading || !settings) {
@@ -221,10 +238,35 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
 
   return (
     <div className="space-y-4">
-      {isSaving && (
-        <div className="flex items-center gap-2 text-xs text-zinc-500">
-          <Loader2 className="h-3 w-3 animate-spin" />
-          Saving...
+      {/* Save/Discard buttons */}
+      {isDirty && (
+        <div className="flex items-center justify-end gap-2 pb-2 border-b border-zinc-800">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleDiscard}
+            className="text-xs text-zinc-400 hover:text-zinc-200 h-7"
+          >
+            Discard
+          </Button>
+          <Button
+            size="sm"
+            onClick={handleSave}
+            disabled={isSaving}
+            className="text-xs bg-purple-600 hover:bg-purple-500 h-7"
+          >
+            {isSaving ? (
+              <>
+                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                Saving...
+              </>
+            ) : (
+              <>
+                <Save className="h-3 w-3 mr-1" />
+                Save
+              </>
+            )}
+          </Button>
         </div>
       )}
 
@@ -239,7 +281,6 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
                 type="text"
                 value={key}
                 onChange={(e) => updateEnvVar(index, e.target.value, value)}
-                onBlur={saveEnvVars}
                 placeholder="KEY"
                 className="flex-1 px-2 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-xs text-zinc-100 placeholder-zinc-600 font-mono"
               />
@@ -247,7 +288,6 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
                 type="text"
                 value={value}
                 onChange={(e) => updateEnvVar(index, key, e.target.value)}
-                onBlur={saveEnvVars}
                 placeholder="value"
                 className="flex-1 px-2 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-xs text-zinc-100 placeholder-zinc-600 font-mono"
               />
@@ -273,7 +313,6 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
           description="Override system Node.js version (e.g., 20.x)"
           value={settings.nodeVersion || ''}
           onChange={(v) => updateSetting('nodeVersion', v || null)}
-          onBlur={() => saveSettings({ nodeVersion: settings.nodeVersion })}
           placeholder="System default"
         />
 
@@ -284,7 +323,6 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
           onChange={(v) => {
             const shell = v === 'system' ? null : (v as 'bash' | 'zsh');
             updateSetting('shell', shell);
-            saveSettings({ shell });
           }}
           options={[
             { value: 'system', label: 'System Default' },
@@ -301,10 +339,7 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
           label="Auto-pull on start"
           description="Pull latest changes before starting dev server"
           checked={settings.git.autoPull}
-          onChange={(v) => {
-            updateNestedSetting('git', 'autoPull', v);
-            saveSettings({ git: { ...settings.git, autoPull: v } });
-          }}
+          onChange={(v) => updateNestedSetting('git', 'autoPull', v)}
         />
 
         <Field
@@ -312,7 +347,6 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
           description="Template for commit messages (supports {project}, {date})"
           value={settings.git.commitTemplate || ''}
           onChange={(v) => updateNestedSetting('git', 'commitTemplate', v || null)}
-          onBlur={() => saveSettings({ git: settings.git })}
           placeholder="Default template"
         />
 
@@ -321,7 +355,6 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
           description="Override default branch for this project"
           value={settings.git.branch || ''}
           onChange={(v) => updateNestedSetting('git', 'branch', v || null)}
-          onBlur={() => saveSettings({ git: settings.git })}
           placeholder="Use global default"
         />
       </div>
@@ -334,7 +367,6 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
           description="Project ID from .vercel/project.json"
           value={settings.deploy.vercelProjectId || ''}
           onChange={(v) => updateNestedSetting('deploy', 'vercelProjectId', v || null)}
-          onBlur={() => saveSettings({ deploy: settings.deploy })}
           placeholder="prj_xxx"
         />
 
@@ -343,7 +375,6 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
           description="Automatically deploy when pushing to this branch"
           value={settings.deploy.autoDeployBranch || ''}
           onChange={(v) => updateNestedSetting('deploy', 'autoDeployBranch', v || null)}
-          onBlur={() => saveSettings({ deploy: settings.deploy })}
           placeholder="Disabled"
         />
 
@@ -354,7 +385,6 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
           onChange={(v) => {
             const environment = v as 'preview' | 'production';
             updateNestedSetting('deploy', 'environment', environment);
-            saveSettings({ deploy: { ...settings.deploy, environment } });
           }}
           options={[
             { value: 'preview', label: 'Preview' },
@@ -371,7 +401,6 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
           description="URL path to check if project is healthy (e.g., /api/health)"
           value={settings.monitoring.healthCheckUrl || ''}
           onChange={(v) => updateNestedSetting('monitoring', 'healthCheckUrl', v || null)}
-          onBlur={() => saveSettings({ monitoring: settings.monitoring })}
           placeholder="/api/health"
         />
 
@@ -379,10 +408,7 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
           label="Restart on crash"
           description="Automatically restart if the dev server crashes"
           checked={settings.monitoring.restartOnCrash}
-          onChange={(v) => {
-            updateNestedSetting('monitoring', 'restartOnCrash', v);
-            saveSettings({ monitoring: { ...settings.monitoring, restartOnCrash: v } });
-          }}
+          onChange={(v) => updateNestedSetting('monitoring', 'restartOnCrash', v)}
         />
 
         <Field
@@ -390,7 +416,6 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
           description="How long to keep project logs"
           value={String(settings.monitoring.logRetentionDays)}
           onChange={(v) => updateNestedSetting('monitoring', 'logRetentionDays', parseInt(v) || 7)}
-          onBlur={() => saveSettings({ monitoring: settings.monitoring })}
           type="number"
           placeholder="7"
         />

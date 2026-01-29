@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { ChevronDown, ChevronRight, FolderOpen, GitBranch, Cloud, Eye, EyeOff, Check, X, Loader2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, FolderOpen, GitBranch, Cloud, Eye, EyeOff, Check, X, Loader2, Save } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { GlobalSettings } from '@/lib/types';
 
@@ -11,10 +11,11 @@ interface CollapsibleSectionProps {
   title: string;
   icon: React.ReactNode;
   defaultOpen?: boolean;
+  isDirty?: boolean;
   children: React.ReactNode;
 }
 
-function CollapsibleSection({ title, icon, defaultOpen = false, children }: CollapsibleSectionProps) {
+function CollapsibleSection({ title, icon, defaultOpen = false, isDirty, children }: CollapsibleSectionProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
   return (
@@ -26,6 +27,9 @@ function CollapsibleSection({ title, icon, defaultOpen = false, children }: Coll
         <div className="flex items-center gap-2">
           {icon}
           <span className="text-sm font-medium text-zinc-200">{title}</span>
+          {isDirty && (
+            <span className="w-2 h-2 rounded-full bg-yellow-500" title="Unsaved changes" />
+          )}
         </div>
         {isOpen ? (
           <ChevronDown className="h-4 w-4 text-zinc-500" />
@@ -48,12 +52,11 @@ interface FieldProps {
   description?: string;
   value: string;
   onChange: (value: string) => void;
-  onBlur?: () => void;
   type?: 'text' | 'password';
   placeholder?: string;
 }
 
-function Field({ label, description, value, onChange, onBlur, type = 'text', placeholder }: FieldProps) {
+function Field({ label, description, value, onChange, type = 'text', placeholder }: FieldProps) {
   const [showPassword, setShowPassword] = useState(false);
   const inputType = type === 'password' && !showPassword ? 'password' : 'text';
 
@@ -66,7 +69,6 @@ function Field({ label, description, value, onChange, onBlur, type = 'text', pla
           type={inputType}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          onBlur={onBlur}
           placeholder={placeholder}
           className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-md text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:border-purple-500"
         />
@@ -120,10 +122,16 @@ function Toggle({ label, description, checked, onChange }: ToggleProps) {
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<GlobalSettings | null>(null);
+  const [originalSettings, setOriginalSettings] = useState<GlobalSettings | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [vercelStatus, setVercelStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle');
   const [vercelUser, setVercelUser] = useState<string | null>(null);
+
+  // Check if settings have changed
+  const isDirty = settings && originalSettings
+    ? JSON.stringify(settings) !== JSON.stringify(originalSettings)
+    : false;
 
   // Fetch settings
   const fetchSettings = useCallback(async () => {
@@ -131,6 +139,7 @@ export default function SettingsPage() {
       const res = await fetch('/api/settings');
       const data = await res.json();
       setSettings(data);
+      setOriginalSettings(data);
     } catch (error) {
       console.error('Failed to fetch settings:', error);
       toast.error('Failed to load settings');
@@ -143,21 +152,22 @@ export default function SettingsPage() {
     fetchSettings();
   }, [fetchSettings]);
 
-  // Save settings
-  const saveSettings = async (partial: Partial<GlobalSettings>) => {
-    if (!settings) return;
+  // Save all settings
+  const handleSave = async () => {
+    if (!settings || !isDirty) return;
 
     setIsSaving(true);
     try {
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(partial),
+        body: JSON.stringify(settings),
       });
 
       if (res.ok) {
         const updated = await res.json();
         setSettings(updated);
+        setOriginalSettings(updated);
         toast.success('Settings saved');
       } else {
         toast.error('Failed to save settings');
@@ -167,6 +177,14 @@ export default function SettingsPage() {
       toast.error('Failed to save settings');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  // Discard changes
+  const handleDiscard = () => {
+    if (originalSettings) {
+      setSettings(originalSettings);
+      toast.info('Changes discarded');
     }
   };
 
@@ -204,7 +222,7 @@ export default function SettingsPage() {
     }
   };
 
-  // Update local state (doesn't save yet)
+  // Update local state helpers
   const updatePaths = (key: keyof GlobalSettings['paths'], value: string) => {
     if (!settings) return;
     setSettings({
@@ -258,12 +276,38 @@ export default function SettingsPage() {
               Global configuration for HexOps
             </p>
           </div>
-          {isSaving && (
-            <div className="flex items-center gap-2 text-xs text-zinc-500">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              Saving...
-            </div>
-          )}
+          <div className="flex items-center gap-2">
+            {isDirty && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleDiscard}
+                  className="text-xs text-zinc-400 hover:text-zinc-200"
+                >
+                  Discard
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleSave}
+                  disabled={isSaving}
+                  className="text-xs bg-purple-600 hover:bg-purple-500"
+                >
+                  {isSaving ? (
+                    <>
+                      <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Save className="h-3 w-3 mr-1" />
+                      Save Changes
+                    </>
+                  )}
+                </Button>
+              </>
+            )}
+          </div>
         </div>
       </header>
 
@@ -280,7 +324,6 @@ export default function SettingsPage() {
               description="Default directory for the shell and scanning projects"
               value={settings.paths.projectsRoot}
               onChange={(v) => updatePaths('projectsRoot', v)}
-              onBlur={() => saveSettings({ paths: settings.paths })}
               placeholder="/home/user/Projects"
             />
             <Field
@@ -288,7 +331,6 @@ export default function SettingsPage() {
               description="Where system logs are stored (relative to HexOps root)"
               value={settings.paths.logsDir}
               onChange={(v) => updatePaths('logsDir', v)}
-              onBlur={() => saveSettings({ paths: settings.paths })}
               placeholder=".hexops/logs"
             />
             <Field
@@ -296,7 +338,6 @@ export default function SettingsPage() {
               description="Where cache files are stored (relative to HexOps root)"
               value={settings.paths.cacheDir}
               onChange={(v) => updatePaths('cacheDir', v)}
-              onBlur={() => saveSettings({ paths: settings.paths })}
               placeholder=".hexops/cache"
             />
           </div>
@@ -314,7 +355,6 @@ export default function SettingsPage() {
               description="Default branch name for new repositories"
               value={settings.integrations.git.defaultBranch}
               onChange={(v) => updateGit('defaultBranch', v)}
-              onBlur={() => saveSettings({ integrations: settings.integrations })}
               placeholder="main"
             />
             <Field
@@ -322,22 +362,13 @@ export default function SettingsPage() {
               description="Prefix added to all commit messages (e.g., 'chore: ')"
               value={settings.integrations.git.commitPrefix}
               onChange={(v) => updateGit('commitPrefix', v)}
-              onBlur={() => saveSettings({ integrations: settings.integrations })}
               placeholder="chore: "
             />
             <Toggle
               label="Auto-push after commit"
               description="Automatically push to remote after committing"
               checked={settings.integrations.git.pushAfterCommit}
-              onChange={(v) => {
-                updateGit('pushAfterCommit', v);
-                saveSettings({
-                  integrations: {
-                    ...settings.integrations,
-                    git: { ...settings.integrations.git, pushAfterCommit: v },
-                  },
-                });
-              }}
+              onChange={(v) => updateGit('pushAfterCommit', v)}
             />
           </div>
         </CollapsibleSection>
@@ -354,7 +385,6 @@ export default function SettingsPage() {
               description="Vercel API token for deployments and project info"
               value={settings.integrations.vercel.token || ''}
               onChange={(v) => updateVercel('token', v || null)}
-              onBlur={() => saveSettings({ integrations: settings.integrations })}
               type="password"
               placeholder="Enter your Vercel API token"
             />
@@ -363,7 +393,6 @@ export default function SettingsPage() {
               description="Optional team ID (leave empty for personal account)"
               value={settings.integrations.vercel.teamId || ''}
               onChange={(v) => updateVercel('teamId', v || null)}
-              onBlur={() => saveSettings({ integrations: settings.integrations })}
               placeholder="team_xxx (optional)"
             />
 
