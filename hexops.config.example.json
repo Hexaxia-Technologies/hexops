@@ -1,31 +1,16 @@
 {
   "projects": [
     {
-      "id": "my-app",
-      "name": "My App",
-      "description": "Main application",
+      "id": "my-project",
+      "name": "My Project",
+      "description": "Example project description",
       "path": "/path/to/your/project",
       "port": 3000,
-      "category": "Product",
+      "category": "Personal",
       "scripts": {
         "dev": "pnpm dev",
         "build": "pnpm build"
       }
-    },
-    {
-      "id": "api-server",
-      "name": "API Server",
-      "description": "Backend API service",
-      "path": "/path/to/api-server",
-      "port": 4000,
-      "category": "Internal",
-      "scripts": {
-        "dev": "npm run dev",
-        "build": "npm run build"
-      },
-      "holds": [
-        "package-to-skip-updates"
-      ]
     }
   ],
   "categories": [
@@ -36,7 +21,7 @@
   ],
   "settings": {
     "paths": {
-      "projectsRoot": "/path/to/your/projects",
+      "projectsRoot": "/path/to/projects",
       "logsDir": ".hexops/logs",
       "cacheDir": ".hexops/cache"
     },

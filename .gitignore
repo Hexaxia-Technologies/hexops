@@ -53,3 +53,6 @@ hexops.config.json
 docs/dev-notes.md
 docs/plans/
 docs/PRD.md
+
+# Local config (use hexops.config.example.json as template)
+hexops.config.json
