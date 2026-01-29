@@ -338,14 +338,6 @@ function HomeContent() {
     return project.category === selectedCategory;
   });
 
-  // Calculate counts
-  const projectCounts = categories.reduce((acc, cat) => {
-    acc[cat] = projects.filter((p) => p.category === cat).length;
-    return acc;
-  }, {} as Record<string, number>);
-
-  const runningCount = projects.filter((p) => p.status === 'running').length;
-
   // Get detail project - safely handle case where project might not exist
   const detailProject = viewMode === 'detail' && detailProjectId
     ? projects.find(p => p.id === detailProjectId)
@@ -363,12 +355,8 @@ function HomeContent() {
     <div className="flex h-screen bg-zinc-950">
       {/* Left Sidebar - Navigation */}
       <Sidebar
-        categories={categories}
         selectedCategory={selectedCategory}
         onSelectCategory={handleSelectCategory}
-        projectCounts={projectCounts}
-        runningCount={runningCount}
-        totalCount={projects.length}
         onAddProject={() => setShowAddProject(true)}
         onOpenShell={() => handleOpenShell()}
       />

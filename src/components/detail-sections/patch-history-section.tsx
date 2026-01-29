@@ -111,7 +111,7 @@ export function PatchHistorySection({ projectId }: PatchHistorySectionProps) {
 
           <div className="flex items-center gap-1 text-[10px] text-zinc-600 flex-shrink-0">
             <Clock className="h-3 w-3" />
-            {formatRelativeTime(entry.timestamp)}
+            {formatDateTime(entry.timestamp)}
           </div>
         </div>
       ))}
@@ -125,18 +125,13 @@ export function PatchHistorySection({ projectId }: PatchHistorySectionProps) {
   );
 }
 
-function formatRelativeTime(timestamp: string): string {
+function formatDateTime(timestamp: string): string {
   const date = new Date(timestamp);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMins / 60);
-  const diffDays = Math.floor(diffHours / 24);
-
-  if (diffMins < 1) return 'just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-
-  return date.toLocaleDateString();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const mins = String(date.getMinutes()).padStart(2, '0');
+  const secs = String(date.getSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day} ${hours}:${mins}:${secs}`;
 }

@@ -718,18 +718,6 @@ export default function PatchesPage() {
     fetchPatches(true);
   };
 
-  // Calculate counts for sidebar
-  const projectCounts = useMemo(() => {
-    if (!data) return {};
-    const counts: Record<string, number> = {};
-    for (const category of data.categories) {
-      counts[category] = Object.entries(data.projectCategories)
-        .filter(([, cat]) => cat === category)
-        .length;
-    }
-    return counts;
-  }, [data]);
-
   // Get unique project count from queue
   const uniqueProjectIds = useMemo(() => {
     if (!data) return new Set<string>();
@@ -760,12 +748,8 @@ export default function PatchesPage() {
     <div className="flex h-screen bg-zinc-950">
       {/* Left Sidebar - Navigation */}
       <Sidebar
-        categories={data.categories}
         selectedCategory={selectedCategory}
         onSelectCategory={setSelectedCategory}
-        projectCounts={projectCounts}
-        runningCount={0}  // Not relevant for patches view
-        totalCount={data.projectCount}
         onAddProject={() => setShowAddProject(true)}
       />
 

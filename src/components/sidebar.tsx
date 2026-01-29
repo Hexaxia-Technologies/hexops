@@ -1,31 +1,33 @@
 'use client';
 
 import Link from 'next/link';
-import { Package, Plus, TerminalSquare, ScrollText } from 'lucide-react';
+import { Package, Plus, TerminalSquare, ScrollText, LayoutDashboard } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { APP_VERSION } from '@/lib/version';
+import { useSidebar } from '@/contexts/sidebar-context';
 
 interface SidebarProps {
-  categories: string[];
-  selectedCategory: string | null;
-  onSelectCategory: (category: string | null) => void;
-  projectCounts: Record<string, number>;
-  runningCount: number;
-  totalCount: number;
+  selectedCategory?: string | null;
+  onSelectCategory?: (category: string | null) => void;
   onAddProject?: () => void;
   onOpenShell?: () => void;
 }
 
 export function Sidebar({
-  categories,
-  selectedCategory,
+  selectedCategory = null,
   onSelectCategory,
-  projectCounts,
-  runningCount,
-  totalCount,
   onAddProject,
   onOpenShell,
 }: SidebarProps) {
+  const { categories, projectCounts, runningCount, totalCount } = useSidebar();
+
+  // If no category handler provided, make buttons non-interactive (just display)
+  const handleCategoryClick = (category: string | null) => {
+    if (onSelectCategory) {
+      onSelectCategory(category);
+    }
+  };
+
   return (
     <aside className="w-48 bg-zinc-950 border-r border-zinc-800 p-4 flex flex-col">
       <Link href="/" className="block mb-6 group">
@@ -35,7 +37,7 @@ export function Sidebar({
 
       <nav className="flex-1 space-y-1">
         <button
-          onClick={() => onSelectCategory(null)}
+          onClick={() => handleCategoryClick(null)}
           className={cn(
             'w-full text-left px-3 py-2 rounded-md text-sm transition-colors flex items-center justify-between',
             selectedCategory === null
@@ -48,7 +50,7 @@ export function Sidebar({
         </button>
 
         <button
-          onClick={() => onSelectCategory('running')}
+          onClick={() => handleCategoryClick('running')}
           className={cn(
             'w-full text-left px-3 py-2 rounded-md text-sm transition-colors flex items-center justify-between',
             selectedCategory === 'running'
@@ -64,7 +66,7 @@ export function Sidebar({
         </button>
 
         <button
-          onClick={() => onSelectCategory('stopped')}
+          onClick={() => handleCategoryClick('stopped')}
           className={cn(
             'w-full text-left px-3 py-2 rounded-md text-sm transition-colors flex items-center justify-between',
             selectedCategory === 'stopped'
@@ -84,7 +86,7 @@ export function Sidebar({
         {categories.map((category) => (
           <button
             key={category}
-            onClick={() => onSelectCategory(category)}
+            onClick={() => handleCategoryClick(category)}
             className={cn(
               'w-full text-left px-3 py-2 rounded-md text-sm transition-colors flex items-center justify-between',
               selectedCategory === category
@@ -110,6 +112,17 @@ export function Sidebar({
         )}
 
         <div className="h-px bg-zinc-800 my-3" />
+
+        <Link
+          href="/"
+          className={cn(
+            'w-full text-left px-3 py-2 rounded-md text-sm transition-colors flex items-center gap-2',
+            'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50'
+          )}
+        >
+          <LayoutDashboard className="h-4 w-4" />
+          Dashboard
+        </Link>
 
         <Link
           href="/patches"

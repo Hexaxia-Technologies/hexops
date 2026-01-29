@@ -1,11 +1,35 @@
 # HexOps Development Notes
 
-**Current Version:** 0.7.0
+**Current Version:** 0.8.0
 **Purpose:** Internal development operations dashboard for managing Hexaxia project dev servers. Start/stop projects, view logs, manage patches, and monitor status from a single interface.
 
 ---
 
 ## Version History
+
+### v0.8.0 (2026-01-29)
+- **Feature:** Comprehensive logging system for debugging, auditing, and monitoring
+  - JSON Lines log file format (one JSON object per line)
+  - Log levels: debug, info, warn, error
+  - Log categories: patches, projects, git, api, system
+  - Automatic log rotation: 50MB per file, 100MB total cap (keeps 2 files max)
+  - Logs stored in `.hexops/logs/system.log` (and `.1` for rotated)
+- **Feature:** Logs dashboard page (`/logs`)
+  - Filterable by level, category, project
+  - Search across all log entries
+  - Live mode with 2-second polling
+  - Expandable rows to show full metadata/details
+  - Load more pagination (100 entries at a time)
+- **Feature:** Activity Log section in project detail page
+  - Shows project-specific logs filtered by projectId
+  - Reusable LogViewer component with configurable filters
+- **Feature:** Dashboard link added to sidebar
+  - Navigation order: Dashboard → Patches → Logs → Shell
+  - Provides clear navigation back to main view from any page
+- **Integration:** Logging added to existing operations
+  - Project start/stop operations
+  - Git commit/push operations
+  - Package update operations
 
 ### v0.7.0 (2026-01-29)
 - **Feature:** Patches dashboard now defaults to grouped view
@@ -33,6 +57,14 @@
   - Advisory links to npm/GitHub when available
 - **UX:** Patch log timestamps now show full date and time (YYYY-MM-DD HH:MM:SS)
   - Changed from relative time (x hrs ago) to absolute format for sysadmin/devops needs
+- **Fix:** Git status property name mismatch in patches view
+  - API returned `isDirty`/`aheadCount`/`behindCount` but client parsed `dirty`/`ahead`/`behind`
+  - Caused git controls to always show as disabled
+- **Fix:** Project cards no longer disappear after committing all patches
+  - Grouped view now shows ALL projects regardless of patch count
+  - Uses `projectNames` map from API to ensure projects remain visible
+- **Fix:** Git status now fetched on page load for all projects
+  - Previously only fetched when expanding a project card
 
 ### v0.6.1 (2026-01-28)
 - **Fix:** Git push/pull now show toast error messages instead of silently failing
@@ -135,6 +167,35 @@
 ---
 
 ## Recent Changes
+
+### Logging System (v0.8.0)
+
+**Summary:** Added comprehensive file-based logging with UI dashboard. Logs all system operations with rotation to prevent disk bloat.
+
+| File | Change |
+|------|--------|
+| `src/lib/logger.ts` | New - Core logger with JSON Lines format, file writing, rotation |
+| `src/lib/log-reader.ts` | New - Log reading with filtering, search, pagination |
+| `src/app/api/logs/route.ts` | New - API endpoint for log queries |
+| `src/app/logs/page.tsx` | New - Logs dashboard page |
+| `src/components/log-viewer.tsx` | New - Reusable log viewer with filters, live mode |
+| `src/components/ui/select.tsx` | New - Radix UI Select component for dropdowns |
+| `src/components/detail-sections/system-logs-section.tsx` | New - Activity Log section for project detail |
+| `src/components/project-detail.tsx` | Added Activity Log collapsible section |
+| `src/components/sidebar.tsx` | Added Dashboard and Logs links |
+| `src/app/api/projects/[id]/start/route.ts` | Added logging for start operations |
+| `src/app/api/projects/[id]/stop/route.ts` | Added logging for stop operations |
+| `src/app/api/projects/[id]/git-commit/route.ts` | Added logging for commit operations |
+| `src/app/api/projects/[id]/git-push/route.ts` | Added logging for push operations |
+| `src/app/api/projects/[id]/update/route.ts` | Added logging for package updates |
+
+**Key Insights:**
+- JSON Lines format (one JSON object per line) is ideal for append-only logs - easy to parse, stream, and rotate
+- Log rotation checks file size before each write; rotates when exceeding 50MB threshold
+- Keeping only 2 files (current + 1 rotated) with 50MB each caps total at ~100MB
+- Radix UI Select component requires careful styling to match existing UI theme
+
+---
 
 ### Shell Panel & System Health (v0.6.0)
 
@@ -300,6 +361,7 @@ page.tsx
 | `/api/system/metrics` | GET | System CPU, memory, disk metrics |
 | `/api/config` | GET | Get config (projectsRoot) |
 | `/api/shell/ws` | WS | WebSocket for shell terminal |
+| `/api/logs` | GET | Query system logs with filters (level, category, project, search) |
 
 ### Process Management
 
@@ -406,7 +468,7 @@ page.tsx
 - [ ] Keyboard shortcuts (j/k navigation, Enter to start)
 - [x] Toast notifications for async operations
 - [ ] Confirmation dialogs for destructive actions
-- [ ] Log filtering and search
+- [x] Log filtering and search (logging system with dashboard)
 - [ ] Environment variable viewer
 - [ ] Auto-update minor/patch dependencies on schedule
 - [ ] Enhanced patch error logging - show actual error message/output when patches fail, not just red indicator
