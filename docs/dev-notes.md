@@ -18,6 +18,10 @@
   - Git Behavior: auto-pull on start, commit template, preferred branch
   - Deploy: Vercel project ID, auto-deploy branch, default environment
   - Monitoring: health check URL, restart on crash, log retention days
+- **UX:** Explicit save button instead of save-on-blur
+  - Save/Discard buttons appear when unsaved changes exist
+  - Always-visible "Save Config" button for manual saves
+  - Dirty state detection via deep clone comparison
 - **Data:** Settings stored in `hexops.config.json`
   - Global settings in `settings` key
   - Project settings in each project's `settings` key
