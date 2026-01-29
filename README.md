@@ -120,6 +120,17 @@ See [Configuration Guide](docs/configuration.md) for all options.
 - pnpm 9+
 - Git
 
+## Disclaimer
+
+This software is provided for educational and development purposes. Hexaxia Technologies and the contributors to this project:
+
+- Make no warranties regarding the software's fitness for any particular purpose
+- Accept no liability for any damages, data loss, or security incidents arising from its use
+- Do not guarantee compatibility with your specific environment or requirements
+- Are not responsible for any actions taken based on this software's output or functionality
+
+**Use at your own risk.** Always review code before running it in production environments, and ensure you have appropriate backups and security measures in place.
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
