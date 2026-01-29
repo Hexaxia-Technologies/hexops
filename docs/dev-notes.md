@@ -1,11 +1,26 @@
 # HexOps Development Notes
 
-**Current Version:** 0.8.0
+**Current Version:** 0.8.1
 **Purpose:** Internal development operations dashboard for managing Hexaxia project dev servers. Start/stop projects, view logs, manage patches, and monitor status from a single interface.
 
 ---
 
 ## Version History
+
+### v0.8.1 (2026-01-29)
+- **Feature:** Static sidebar architecture - sidebar no longer reloads on page navigation
+  - Created `SidebarProvider` context for shared sidebar data across all pages
+  - Added `AppShell` component in `providers.tsx` to wrap all pages with static sidebar
+  - Shell panel now managed globally (accessible from any page)
+- **Feature:** Lightweight `/api/sidebar` endpoint for faster sidebar loading
+  - Returns only essential data (id, name, category, status)
+  - Skips extended status checks (package health) that slowed navigation
+- **Fix:** Double sidebar issue when opening shell from Dashboard
+  - Removed per-page RightSidebar in favor of global shell in AppShell
+  - Dashboard page now uses shared shell panel from layout
+- **Fix:** Shell panel scrollbar overflow
+  - Added `h-full overflow-hidden` to shell container for proper height constraints
+- **Cleanup:** Removed unused `app-shell.tsx` component (replaced by providers.tsx)
 
 ### v0.8.0 (2026-01-29)
 - **Feature:** Comprehensive logging system for debugging, auditing, and monitoring

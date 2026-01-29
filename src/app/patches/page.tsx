@@ -5,9 +5,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Sidebar } from '@/components/sidebar';
 import { PatchesSidebar, type UpdateResult, type UpdateStatus } from '@/components/patches-sidebar';
-import { AddProjectDialog } from '@/components/add-project-dialog';
 import { RefreshCw, Shield, Package, ArrowUp, List, FolderTree, ChevronDown, ChevronRight, AlertTriangle, Link as LinkIcon, PauseCircle, PlayCircle, ExternalLink, HelpCircle } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
@@ -103,8 +101,7 @@ export default function PatchesPage() {
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_PREFS.viewMode);
   const [selectedPackages, setSelectedPackages] = useState<Set<string>>(new Set());
   const [updating, setUpdating] = useState(false);
-  const [showAddProject, setShowAddProject] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [selectedCategory] = useState<string | null>(null);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [recentUpdates, setRecentUpdates] = useState<UpdateResult[]>([]);
@@ -726,17 +723,17 @@ export default function PatchesPage() {
 
   if (loading) {
     return (
-      <div className="flex h-screen bg-zinc-950 items-center justify-center">
+      <main className="flex-1 flex items-center justify-center">
         <div className="text-zinc-500">Loading patch data...</div>
-      </div>
+      </main>
     );
   }
 
   if (!data) {
     return (
-      <div className="flex h-screen bg-zinc-950 items-center justify-center">
+      <main className="flex-1 flex items-center justify-center">
         <div className="text-red-400">Failed to load patch data</div>
-      </div>
+      </main>
     );
   }
 
@@ -745,15 +742,7 @@ export default function PatchesPage() {
     summary.outdatedMajor + summary.outdatedMinor + summary.outdatedPatch;
 
   return (
-    <div className="flex h-screen bg-zinc-950">
-      {/* Left Sidebar - Navigation */}
-      <Sidebar
-        selectedCategory={selectedCategory}
-        onSelectCategory={setSelectedCategory}
-        onAddProject={() => setShowAddProject(true)}
-      />
-
-      {/* Main Content */}
+    <>
       <main className="flex-1 flex flex-col overflow-hidden">
         {/* Header */}
         <header className="border-b border-zinc-800 px-6 py-4">
@@ -1181,15 +1170,7 @@ export default function PatchesPage() {
         updateStatus={updateStatus}
         recentUpdates={recentUpdates}
       />
-
-      {/* Add Project Dialog */}
-      <AddProjectDialog
-        open={showAddProject}
-        onOpenChange={setShowAddProject}
-        onSuccess={() => fetchPatches(true)}
-        categories={data?.categories || []}
-      />
-    </div>
+    </>
   );
 }
 
