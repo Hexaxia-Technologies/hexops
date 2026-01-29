@@ -56,3 +56,8 @@ docs/PRD.md
 
 # Local config (use hexops.config.example.json as template)
 hexops.config.json
+
+# Internal docs
+docs/PRD.md
+docs/dev-notes.md
+docs/plans/
