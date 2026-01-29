@@ -120,6 +120,18 @@ See [Configuration Guide](docs/configuration.md) for all options.
 - pnpm 9+
 - Git
 
+## Security
+
+> **⚠️ HexOps is designed for local use only. Never expose it to the internet or untrusted networks.**
+
+HexOps provides full shell access, process control, and file system operations by design. These are powerful features for local development but would be dangerous if exposed publicly.
+
+- Always run on `localhost` only
+- Do not port-forward or reverse-proxy to the internet
+- Do not run in environments accessible to untrusted users
+
+If you need remote access, use SSH tunneling or a VPN to your local machine.
+
 ## Disclaimer
 
 This software is provided for educational and development purposes. Hexaxia Technologies and the contributors to this project:
