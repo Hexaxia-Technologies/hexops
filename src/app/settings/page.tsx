@@ -155,7 +155,7 @@ export default function SettingsPage() {
 
   // Save all settings
   const handleSave = async () => {
-    if (!settings || !isDirty) return;
+    if (!settings) return;
 
     setIsSaving(true);
     try {
@@ -280,7 +280,7 @@ export default function SettingsPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {isDirty && (
+            {isDirty ? (
               <>
                 <Button
                   variant="ghost"
@@ -309,6 +309,26 @@ export default function SettingsPage() {
                   )}
                 </Button>
               </>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSave}
+                disabled={isSaving}
+                className="text-xs border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+              >
+                {isSaving ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-3 w-3 mr-1" />
+                    Save Config
+                  </>
+                )}
+              </Button>
             )}
           </div>
         </div>
