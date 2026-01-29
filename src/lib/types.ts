@@ -144,6 +144,7 @@ export interface VulnerabilityInfo {
   path: string;
   fixAvailable: boolean;
   fixVersion?: string;
+  currentVersion?: string;      // Currently installed version
   // Transitive dependency info
   isDirect: boolean;            // Is this a direct dependency?
   via?: string[];               // Dependency chain (e.g., ["@vercel/blob", "undici"])

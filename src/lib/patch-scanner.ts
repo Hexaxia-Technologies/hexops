@@ -180,7 +180,7 @@ export async function scanVulnerabilities(
           module_name: string;
           severity: string;
           title: string;
-          findings: Array<{ paths: string[] }>;
+          findings: Array<{ version?: string; paths: string[] }>;
           patched_versions: string;
           cves?: string[];
           url?: string;
@@ -188,12 +188,17 @@ export async function scanVulnerabilities(
         };
         const depPath = adv.findings?.[0]?.paths?.[0] || adv.module_name;
         const pathParts = depPath.split('>').map(s => s.trim());
+        const currentVersion = adv.findings?.[0]?.version;
+        // Extract fix version from patched_versions (e.g., ">=16.1.5" -> "16.1.5")
+        const fixVersion = adv.patched_versions?.match(/[\d.]+/)?.[0];
         result.push({
           name: adv.module_name,
           severity: adv.severity as VulnSeverity,
           title: adv.title,
           path: depPath,
           fixAvailable: adv.patched_versions !== '<0.0.0',
+          fixVersion,
+          currentVersion,
           isDirect: pathParts.length === 1,
           via: pathParts.length > 1 ? pathParts : undefined,
           parentPackage: pathParts.length > 1 ? pathParts[0] : undefined,
@@ -350,7 +355,7 @@ export function buildPriorityQueue(
         type: 'vulnerability',
         severity: vuln.severity,
         package: vuln.name,
-        currentVersion: '',
+        currentVersion: vuln.currentVersion || '',
         targetVersion: vuln.fixVersion || '',
         updateType: 'patch',
         projectId: cache.projectId,
