@@ -84,6 +84,10 @@ export interface PatchQueueItem {
   via?: string[];
   parentPackage?: string;
   parentAtLatest?: boolean;
+  // CVE/Advisory info (for vulnerabilities)
+  cves?: string[];
+  url?: string;
+  advisoryId?: number;
 }
 
 export interface PatchSummary {
@@ -145,6 +149,10 @@ export interface VulnerabilityInfo {
   via?: string[];               // Dependency chain (e.g., ["@vercel/blob", "undici"])
   parentPackage?: string;       // Direct parent package that needs updating
   parentAtLatest?: boolean;     // Is the parent already at latest version?
+  // CVE/Advisory info
+  cves?: string[];              // CVE identifiers (e.g., ["CVE-2024-12345"])
+  url?: string;                 // Link to advisory (GitHub/npm)
+  advisoryId?: number;          // npm advisory ID
 }
 
 export interface ProjectPatchCache {

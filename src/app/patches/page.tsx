@@ -8,7 +8,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Sidebar } from '@/components/sidebar';
 import { PatchesSidebar, type UpdateResult, type UpdateStatus } from '@/components/patches-sidebar';
 import { AddProjectDialog } from '@/components/add-project-dialog';
-import { RefreshCw, Shield, Package, ArrowUp, List, FolderTree, ChevronDown, ChevronRight, AlertTriangle, Link as LinkIcon, PauseCircle, PlayCircle, ExternalLink } from 'lucide-react';
+import { RefreshCw, Shield, Package, ArrowUp, List, FolderTree, ChevronDown, ChevronRight, AlertTriangle, Link as LinkIcon, PauseCircle, PlayCircle, ExternalLink, HelpCircle } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import type { PatchQueueItem, PatchSummary } from '@/lib/types';
@@ -1155,6 +1155,7 @@ interface PatchRowProps {
 }
 
 function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject }: PatchRowProps) {
+  const [showDetails, setShowDetails] = useState(false);
   const isUnfixable = item.type === 'vulnerability' && item.fixAvailable === false;
   const isTransitive = item.isDirect === false;
   const isHeld = item.isHeld === true;
@@ -1165,107 +1166,243 @@ function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject }: 
     onHold(item.projectId, item.package, !isHeld);
   };
 
+  const handleInfoClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowDetails(!showDetails);
+  };
+
   return (
-    <div
-      className={cn(
-        'flex items-center gap-4 p-4 rounded-lg border transition-colors',
-        isHeld
-          ? 'bg-zinc-900/50 border-zinc-800/50 opacity-60'
-          : isSelected
-          ? 'bg-purple-500/10 border-purple-500/30 cursor-pointer'
-          : isUnfixable
-          ? 'bg-amber-500/5 border-amber-500/20 hover:border-amber-500/30 cursor-pointer'
-          : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700 cursor-pointer'
-      )}
-      onClick={() => !isHeld && onToggle(itemKey)}
+    <div className="rounded-lg border transition-colors overflow-hidden"
+      style={{
+        backgroundColor: isHeld ? 'rgba(24, 24, 27, 0.5)' : isSelected ? 'rgba(168, 85, 247, 0.1)' : isUnfixable ? 'rgba(245, 158, 11, 0.05)' : 'rgb(24, 24, 27)',
+        borderColor: isHeld ? 'rgba(39, 39, 42, 0.5)' : isSelected ? 'rgba(168, 85, 247, 0.3)' : isUnfixable ? 'rgba(245, 158, 11, 0.2)' : 'rgb(39, 39, 42)',
+        opacity: isHeld ? 0.6 : 1,
+      }}
     >
-      <Checkbox
-        checked={isSelected}
-        onCheckedChange={() => onToggle(itemKey)}
-        disabled={isDisabled}
-        className={isDisabled ? 'opacity-50' : undefined}
-      />
+      <div
+        className={cn(
+          'flex items-center gap-4 p-4 cursor-pointer',
+          !isHeld && !isSelected && !isUnfixable && 'hover:bg-zinc-800/50'
+        )}
+        onClick={() => !isHeld && onToggle(itemKey)}
+      >
+        <Checkbox
+          checked={isSelected}
+          onCheckedChange={() => onToggle(itemKey)}
+          disabled={isDisabled}
+          className={isDisabled ? 'opacity-50' : undefined}
+        />
 
-      <SeverityBadge type={item.type} severity={item.severity} />
+        <SeverityBadge type={item.type} severity={item.severity} />
 
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className={cn('font-mono font-medium', isHeld && 'text-zinc-500')}>{item.package}</span>
-          {item.currentVersion && (
-            <>
-              <span className="text-zinc-500 font-mono text-sm">
-                {item.currentVersion}
-              </span>
-              <span className="text-zinc-600">→</span>
-              <span className={cn('font-mono text-sm', isHeld ? 'text-zinc-500' : 'text-green-400')}>
-                {item.targetVersion}
-              </span>
-            </>
-          )}
-          <Badge variant="outline" className="text-xs border-zinc-700 text-zinc-500">
-            {item.updateType}
-          </Badge>
-          {isHeld && (
-            <Badge variant="outline" className="text-xs bg-zinc-500/10 border-zinc-500/30 text-zinc-400">
-              <PauseCircle className="h-3 w-3 mr-1" />
-              On hold
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={cn('font-mono font-medium', isHeld && 'text-zinc-500')}>{item.package}</span>
+            {item.currentVersion && (
+              <>
+                <span className="text-zinc-500 font-mono text-sm">
+                  {item.currentVersion}
+                </span>
+                <span className="text-zinc-600">→</span>
+                <span className={cn('font-mono text-sm', isHeld ? 'text-zinc-500' : 'text-green-400')}>
+                  {item.targetVersion}
+                </span>
+              </>
+            )}
+            <Badge variant="outline" className="text-xs border-zinc-700 text-zinc-500">
+              {item.updateType}
             </Badge>
+            {isHeld && (
+              <Badge variant="outline" className="text-xs bg-zinc-500/10 border-zinc-500/30 text-zinc-400">
+                <PauseCircle className="h-3 w-3 mr-1" />
+                On hold
+              </Badge>
+            )}
+            {isUnfixable && !isHeld && (
+              <Badge variant="outline" className="text-xs bg-amber-500/10 border-amber-500/30 text-amber-400">
+                <AlertTriangle className="h-3 w-3 mr-1" />
+                No fix available
+              </Badge>
+            )}
+            {/* CVE badges */}
+            {item.cves && item.cves.length > 0 && (
+              <Badge variant="outline" className="text-xs bg-red-500/10 border-red-500/30 text-red-400">
+                {item.cves.length} CVE{item.cves.length !== 1 ? 's' : ''}
+              </Badge>
+            )}
+          </div>
+          {item.title && (
+            <p className="text-sm text-zinc-500 truncate mt-1">{item.title}</p>
           )}
-          {isUnfixable && !isHeld && (
-            <Badge variant="outline" className="text-xs bg-amber-500/10 border-amber-500/30 text-amber-400">
-              <AlertTriangle className="h-3 w-3 mr-1" />
-              No fix available
-            </Badge>
+          {/* Dependency chain for transitive vulnerabilities */}
+          {isTransitive && item.via && item.via.length > 0 && (
+            <div className="flex items-center gap-1 mt-1 text-xs text-zinc-600">
+              <LinkIcon className="h-3 w-3" />
+              <span>via</span>
+              {item.via.map((dep, idx) => (
+                <span key={dep}>
+                  <span className="font-mono text-zinc-500">{dep}</span>
+                  {idx < item.via!.length - 1 && <span className="text-zinc-700 mx-1">→</span>}
+                </span>
+              ))}
+            </div>
+          )}
+          {/* Parent package at latest indicator */}
+          {isTransitive && item.parentPackage && (
+            <p className="text-xs text-amber-500/70 mt-1">
+              ⚠ {item.parentPackage} needs to update its dependencies
+            </p>
+          )}
+          {showProject && (
+            <p className="text-xs text-zinc-600 mt-1">
+              Project: {item.projectName}
+            </p>
           )}
         </div>
-        {item.title && (
-          <p className="text-sm text-zinc-500 truncate mt-1">{item.title}</p>
-        )}
-        {/* Dependency chain for transitive vulnerabilities */}
-        {isTransitive && item.via && item.via.length > 0 && (
-          <div className="flex items-center gap-1 mt-1 text-xs text-zinc-600">
-            <LinkIcon className="h-3 w-3" />
-            <span>via</span>
-            {item.via.map((dep, idx) => (
-              <span key={dep}>
-                <span className="font-mono text-zinc-500">{dep}</span>
-                {idx < item.via!.length - 1 && <span className="text-zinc-700 mx-1">→</span>}
-              </span>
-            ))}
-          </div>
-        )}
-        {/* Parent package at latest indicator */}
-        {isTransitive && item.parentPackage && (
-          <p className="text-xs text-amber-500/70 mt-1">
-            ⚠ {item.parentPackage} needs to update its dependencies
-          </p>
-        )}
-        {showProject && (
-          <p className="text-xs text-zinc-600 mt-1">
-            Project: {item.projectName}
-          </p>
-        )}
+
+        {/* Info button */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleInfoClick}
+          className={cn(
+            'h-8 px-2',
+            showDetails
+              ? 'text-blue-400 hover:text-blue-300 hover:bg-blue-500/10'
+              : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+          )}
+          title="Show details"
+        >
+          <HelpCircle className="h-4 w-4" />
+        </Button>
+
+        {/* Hold/Unhold button */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleHoldClick}
+          className={cn(
+            'h-8 px-2',
+            isHeld
+              ? 'text-green-400 hover:text-green-300 hover:bg-green-500/10'
+              : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+          )}
+          title={isHeld ? 'Release hold' : 'Put on hold'}
+        >
+          {isHeld ? (
+            <PlayCircle className="h-4 w-4" />
+          ) : (
+            <PauseCircle className="h-4 w-4" />
+          )}
+        </Button>
       </div>
 
-      {/* Hold/Unhold button */}
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={handleHoldClick}
-        className={cn(
-          'h-8 px-2',
-          isHeld
-            ? 'text-green-400 hover:text-green-300 hover:bg-green-500/10'
-            : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
-        )}
-        title={isHeld ? 'Release hold' : 'Put on hold'}
-      >
-        {isHeld ? (
-          <PlayCircle className="h-4 w-4" />
-        ) : (
-          <PauseCircle className="h-4 w-4" />
-        )}
-      </Button>
+      {/* Expandable details panel */}
+      {showDetails && (
+        <div className="border-t border-zinc-800 bg-zinc-950 px-4 py-3">
+          <div className="grid grid-cols-2 gap-4 text-xs">
+            <div>
+              <span className="text-zinc-500">Package:</span>
+              <span className="ml-2 font-mono text-zinc-300">{item.package}</span>
+            </div>
+            <div>
+              <span className="text-zinc-500">Type:</span>
+              <span className="ml-2 text-zinc-300 capitalize">{item.type}</span>
+            </div>
+            {item.type === 'vulnerability' && (
+              <>
+                <div>
+                  <span className="text-zinc-500">Severity:</span>
+                  <span className="ml-2 text-zinc-300 capitalize">{item.severity}</span>
+                </div>
+                <div>
+                  <span className="text-zinc-500">Fix Available:</span>
+                  <span className={cn('ml-2', item.fixAvailable ? 'text-green-400' : 'text-amber-400')}>
+                    {item.fixAvailable ? 'Yes' : 'No'}
+                  </span>
+                </div>
+              </>
+            )}
+            {item.type === 'outdated' && (
+              <>
+                <div>
+                  <span className="text-zinc-500">Update Type:</span>
+                  <span className="ml-2 text-zinc-300 capitalize">{item.updateType}</span>
+                </div>
+                <div>
+                  <span className="text-zinc-500">Version:</span>
+                  <span className="ml-2 font-mono text-zinc-400">{item.currentVersion}</span>
+                  <span className="mx-1 text-zinc-600">→</span>
+                  <span className="font-mono text-green-400">{item.targetVersion}</span>
+                </div>
+              </>
+            )}
+            {item.isDirect !== undefined && (
+              <div>
+                <span className="text-zinc-500">Dependency:</span>
+                <span className="ml-2 text-zinc-300">{item.isDirect ? 'Direct' : 'Transitive'}</span>
+              </div>
+            )}
+            {item.title && (
+              <div className="col-span-2">
+                <span className="text-zinc-500">Description:</span>
+                <span className="ml-2 text-zinc-300">{item.title}</span>
+              </div>
+            )}
+            {/* CVE Information */}
+            {item.cves && item.cves.length > 0 && (
+              <div className="col-span-2">
+                <span className="text-zinc-500">CVE{item.cves.length !== 1 ? 's' : ''}:</span>
+                <div className="ml-2 mt-1 flex flex-wrap gap-2">
+                  {item.cves.map(cve => (
+                    <a
+                      key={cve}
+                      href={`https://nvd.nist.gov/vuln/detail/${cve}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors font-mono text-xs"
+                    >
+                      {cve}
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* Advisory link */}
+            {item.url && (
+              <div className="col-span-2">
+                <span className="text-zinc-500">Advisory:</span>
+                <a
+                  href={item.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="ml-2 inline-flex items-center gap-1 text-blue-400 hover:text-blue-300"
+                >
+                  View Advisory <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+            )}
+            {/* npm advisory ID link if no URL but has advisoryId */}
+            {!item.url && item.advisoryId && (
+              <div className="col-span-2">
+                <span className="text-zinc-500">Advisory:</span>
+                <a
+                  href={`https://www.npmjs.com/advisories/${item.advisoryId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="ml-2 inline-flex items-center gap-1 text-blue-400 hover:text-blue-300"
+                >
+                  npm Advisory #{item.advisoryId} <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

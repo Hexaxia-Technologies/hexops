@@ -182,6 +182,9 @@ export async function scanVulnerabilities(
           title: string;
           findings: Array<{ paths: string[] }>;
           patched_versions: string;
+          cves?: string[];
+          url?: string;
+          id?: number;
         };
         const depPath = adv.findings?.[0]?.paths?.[0] || adv.module_name;
         const pathParts = depPath.split('>').map(s => s.trim());
@@ -194,6 +197,9 @@ export async function scanVulnerabilities(
           isDirect: pathParts.length === 1,
           via: pathParts.length > 1 ? pathParts : undefined,
           parentPackage: pathParts.length > 1 ? pathParts[0] : undefined,
+          cves: adv.cves?.length ? adv.cves : undefined,
+          url: adv.url,
+          advisoryId: adv.id,
         });
       }
     }
@@ -203,17 +209,21 @@ export async function scanVulnerabilities(
       for (const [name, info] of Object.entries(data.vulnerabilities)) {
         const vuln = info as {
           severity: string;
-          via: Array<string | { title?: string; source?: number }>;
+          via: Array<string | { title?: string; source?: number; url?: string; cwe?: string[] }>;
           fixAvailable: boolean | { name: string; version: string; isSemVerMajor?: boolean };
           isDirect: boolean;
           effects?: string[];
         };
 
-        // Extract title from via (can be string or object with title)
+        // Extract title and advisory info from via (can be string or object with title)
         let title = 'Vulnerability';
+        let advisoryId: number | undefined;
+        let url: string | undefined;
         const viaWithTitle = vuln.via?.find(v => typeof v === 'object' && v.title);
         if (viaWithTitle && typeof viaWithTitle === 'object') {
           title = viaWithTitle.title || title;
+          advisoryId = viaWithTitle.source;
+          url = viaWithTitle.url || (advisoryId ? `https://github.com/advisories/GHSA-${advisoryId}` : undefined);
         }
 
         // Build dependency chain from via field
@@ -259,6 +269,8 @@ export async function scanVulnerabilities(
           via: viaChain?.length > 0 ? viaChain : undefined,
           parentPackage,
           parentAtLatest: isBreakingFix, // If breaking fix needed, parent is likely at latest
+          advisoryId,
+          url,
         });
       }
     }
@@ -351,6 +363,10 @@ export function buildPriorityQueue(
         via: vuln.via,
         parentPackage: vuln.parentPackage,
         parentAtLatest: vuln.parentAtLatest,
+        // CVE/Advisory info
+        cves: vuln.cves,
+        url: vuln.url,
+        advisoryId: vuln.advisoryId,
       });
 
       // Update summary (counts all occurrences)

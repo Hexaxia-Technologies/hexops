@@ -14,6 +14,7 @@
   - Filters (category, type) reset each session intentionally
 - **Feature:** Rearranged project card header in grouped view
   - Select All moved to left (after patch count)
+  - External link icon to jump to project details page
   - Git controls (Commit/Push) added on far right
 - **Feature:** Inline commit UI after patches are applied
   - Shows summary of updated packages with security fixes highlighted
@@ -24,6 +25,14 @@
   - Commit button enabled when uncommitted patch changes exist
   - Push button shows ahead count (e.g., "Push (1↑)")
   - Loading states during commit/push operations
+- **Feature:** Patch row details panel
+  - Click info (?) icon to expand detailed information
+  - Shows package type, severity, version details, dependency type
+  - CVE badges with count when vulnerabilities have CVEs
+  - Clickable CVE links to NVD (nvd.nist.gov)
+  - Advisory links to npm/GitHub when available
+- **UX:** Patch log timestamps now show full date and time (YYYY-MM-DD HH:MM:SS)
+  - Changed from relative time (x hrs ago) to absolute format for sysadmin/devops needs
 
 ### v0.6.1 (2026-01-28)
 - **Fix:** Git push/pull now show toast error messages instead of silently failing

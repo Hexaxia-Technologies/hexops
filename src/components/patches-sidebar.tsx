@@ -153,8 +153,8 @@ function UpdateResultItem({ result }: { result: UpdateResult }) {
             </div>
           )}
         </div>
-        <span className="text-[10px] text-zinc-600 flex-shrink-0">
-          {result.timestamp.toLocaleTimeString()}
+        <span className="text-[10px] text-zinc-600 flex-shrink-0 whitespace-nowrap">
+          {result.timestamp.toLocaleDateString('en-CA')} {result.timestamp.toLocaleTimeString('en-GB')}
         </span>
       </div>
     </div>
