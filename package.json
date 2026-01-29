@@ -2,6 +2,12 @@
   "name": "hexops",
   "version": "0.9.0",
   "private": true,
+  "author": "Hexaxia Technologies",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Hexaxia-Technologies/hexops.git"
+  },
+  "homepage": "https://github.com/Hexaxia-Technologies/hexops#readme",
   "scripts": {
     "dev": "node server.js",
     "dev:next": "next dev",
