@@ -347,37 +347,78 @@ export function buildPriorityQueue(
     const projectName = projectMap[cache.projectId] || cache.projectId;
     const projectHolds = holdsMap[cache.projectId] || [];
 
-    // Process vulnerabilities (higher priority)
+    // Deduplicate vulnerabilities by package name within project
+    // Multiple advisories for same package get merged into one entry
+    const vulnsByPackage = new Map<string, {
+      vulns: typeof cache.vulnerabilities;
+      highestSeverity: string;
+      severityScore: number;
+    }>();
+
+    const severityOrder: Record<string, number> = { critical: 4, high: 3, moderate: 2, low: 1, info: 0 };
+
     for (const vuln of cache.vulnerabilities) {
-      const isHeld = projectHolds.includes(vuln.name);
+      const existing = vulnsByPackage.get(vuln.name);
+      const score = severityOrder[vuln.severity] ?? 0;
+
+      if (!existing) {
+        vulnsByPackage.set(vuln.name, {
+          vulns: [vuln],
+          highestSeverity: vuln.severity,
+          severityScore: score,
+        });
+      } else {
+        existing.vulns.push(vuln);
+        if (score > existing.severityScore) {
+          existing.highestSeverity = vuln.severity;
+          existing.severityScore = score;
+        }
+      }
+    }
+
+    // Process deduplicated vulnerabilities
+    for (const [packageName, data] of vulnsByPackage) {
+      const { vulns, highestSeverity } = data;
+      const firstVuln = vulns[0];
+      const isHeld = projectHolds.includes(packageName);
+
+      // Aggregate all CVEs from all advisories for this package
+      const allCves = vulns.flatMap(v => v.cves || []).filter((cve, i, arr) => arr.indexOf(cve) === i);
+      // Aggregate all advisory URLs
+      const allUrls = vulns.map(v => v.url).filter(Boolean) as string[];
+      // Build combined title showing vulnerability count
+      const title = vulns.length === 1
+        ? firstVuln.title
+        : `${vulns.length} vulnerabilities: ${vulns.map(v => v.title).join('; ')}`;
+
       queue.push({
-        priority: getPriorityScore('vulnerability', vuln.severity),
+        priority: getPriorityScore('vulnerability', highestSeverity),
         type: 'vulnerability',
-        severity: vuln.severity,
-        package: vuln.name,
-        currentVersion: vuln.currentVersion || '',
-        targetVersion: vuln.fixVersion || '',
+        severity: highestSeverity as VulnSeverity,
+        package: packageName,
+        currentVersion: firstVuln.currentVersion || '',
+        targetVersion: firstVuln.fixVersion || '',
         updateType: 'patch',
         projectId: cache.projectId,
         projectName,
-        title: vuln.title,
-        fixAvailable: vuln.fixAvailable,
+        title,
+        fixAvailable: vulns.some(v => v.fixAvailable),
         isHeld,
-        // Transitive dependency info
-        isDirect: vuln.isDirect,
-        via: vuln.via,
-        parentPackage: vuln.parentPackage,
-        parentAtLatest: vuln.parentAtLatest,
-        // CVE/Advisory info
-        cves: vuln.cves,
-        url: vuln.url,
-        advisoryId: vuln.advisoryId,
+        // Transitive dependency info (from first vuln)
+        isDirect: firstVuln.isDirect,
+        via: firstVuln.via,
+        parentPackage: firstVuln.parentPackage,
+        parentAtLatest: firstVuln.parentAtLatest,
+        // Aggregated CVE/Advisory info
+        cves: allCves.length > 0 ? allCves : undefined,
+        url: allUrls[0], // Primary URL
+        advisoryId: firstVuln.advisoryId,
       });
 
-      // Update summary (counts all occurrences)
-      if (vuln.severity === 'critical') summary.critical++;
-      else if (vuln.severity === 'high') summary.high++;
-      else if (vuln.severity === 'moderate') summary.moderate++;
+      // Update summary (count once per package, using highest severity)
+      if (highestSeverity === 'critical') summary.critical++;
+      else if (highestSeverity === 'high') summary.high++;
+      else if (highestSeverity === 'moderate') summary.moderate++;
     }
 
     // Process outdated packages
