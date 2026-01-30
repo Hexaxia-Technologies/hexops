@@ -25,17 +25,18 @@ export async function GET(_request: NextRequest) {
       }
     }
 
-    // Scan all projects (uses cache if valid)
-    const caches = await Promise.all(
-      projects.map(async project => {
-        try {
-          return await scanProject(project);
-        } catch (err) {
-          console.error(`Failed to scan project ${project.id}:`, err);
-          return null;
-        }
-      })
-    );
+    // Scan projects sequentially to avoid timeout issues when cache misses occur
+    // (parallel scanning overwhelms the system with too many npm/pnpm commands)
+    const caches: (ProjectPatchCache | null)[] = [];
+    for (const project of projects) {
+      try {
+        const cache = await scanProject(project);
+        caches.push(cache);
+      } catch (err) {
+        console.error(`Failed to scan project ${project.id}:`, err);
+        caches.push(null);
+      }
+    }
 
     // Filter out failed scans
     const validCaches = caches.filter((c): c is ProjectPatchCache => c !== null);

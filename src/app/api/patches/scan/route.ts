@@ -21,18 +21,19 @@ export async function POST(_request: NextRequest) {
       projectCategories[project.id] = project.category;
     }
 
-    // Force refresh all projects
-    const caches = await Promise.all(
-      projects.map(async project => {
-        try {
-          return await scanProject(project, true);
-        } catch (err) {
-          console.error(`Failed to scan project ${project.id}:`, err);
-          failedProjects.push(project.id);
-          return null;
-        }
-      })
-    );
+    // Scan projects sequentially to avoid timeout issues
+    // (parallel scanning overwhelms the system with too many npm/pnpm commands)
+    const caches: (ProjectPatchCache | null)[] = [];
+    for (const project of projects) {
+      try {
+        const cache = await scanProject(project, true);
+        caches.push(cache);
+      } catch (err) {
+        console.error(`Failed to scan project ${project.id}:`, err);
+        failedProjects.push(project.id);
+        caches.push(null);
+      }
+    }
 
     // Filter out failed scans
     const validCaches = caches.filter((c): c is ProjectPatchCache => c !== null);

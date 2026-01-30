@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync } from 'fs';
 import { join } from 'path';
 import type {
   PatchState,
@@ -188,5 +188,28 @@ export function invalidateProjectCache(projectId: string): void {
     } catch {
       // Ignore deletion errors
     }
+  }
+}
+
+/**
+ * Clear all project caches
+ */
+export function clearAllProjectCaches(): void {
+  ensurePatchStorageDir();
+  if (!existsSync(CACHE_DIR)) return;
+
+  try {
+    const files = readdirSync(CACHE_DIR);
+    for (const file of files) {
+      if (file.endsWith('.json')) {
+        try {
+          unlinkSync(join(CACHE_DIR, file));
+        } catch {
+          // Ignore individual deletion errors
+        }
+      }
+    }
+  } catch {
+    // Ignore read errors
   }
 }
