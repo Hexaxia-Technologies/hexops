@@ -13,12 +13,16 @@ export async function POST(_request: NextRequest) {
     // All projects can be scanned and patched (hexops works fine in dev mode with hot reload)
     const projects = allProjects;
 
-    // Build project ID -> name mapping
+    // Build project ID -> name mapping and holds map
     const projectMap: Record<string, string> = {};
     const projectCategories: Record<string, string> = {};
+    const holdsMap: Record<string, string[]> = {};
     for (const project of projects) {
       projectMap[project.id] = project.name;
       projectCategories[project.id] = project.category;
+      if (project.holds && project.holds.length > 0) {
+        holdsMap[project.id] = project.holds;
+      }
     }
 
     // Scan projects sequentially to avoid timeout issues
@@ -43,8 +47,8 @@ export async function POST(_request: NextRequest) {
     state.lastFullScan = new Date().toISOString();
     writePatchState(state);
 
-    // Build priority queue with project names
-    const { queue, summary } = buildPriorityQueue(validCaches, projectMap);
+    // Build priority queue with project names and holds
+    const { queue, summary } = buildPriorityQueue(validCaches, projectMap, holdsMap);
 
     return NextResponse.json({
       success: failedProjects.length === 0,
