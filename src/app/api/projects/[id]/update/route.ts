@@ -147,19 +147,39 @@ export async function POST(
             stdout = err.stdout || '';
             stderr = err.stderr || '';
 
-            // Check if the package actually installed despite the error.
-            // pnpm/npm write install progress to stdout before postinstall runs,
-            // so if we see install-complete indicators the failure is from postinstall
-            // (e.g. stderr warnings from dependencies), not from the install itself.
-            const looksInstalled =
-              stdout.includes('done') ||
-              stdout.includes('added') ||
-              stdout.includes('changed') ||
-              stdout.includes('reused') ||
-              stdout.includes('Already up to date');
+            // npm ERESOLVE: peer dependency conflict blocks the entire install.
+            // Retry with --legacy-peer-deps to skip unrelated peer dep validation.
+            if (packageManager === 'npm' && stderr.includes('ERESOLVE')) {
+              try {
+                const retryCmd = `${installCmd} --legacy-peer-deps`;
+                const retryResult = await execAsync(retryCmd, {
+                  cwd,
+                  timeout: 60000,
+                });
+                stdout = retryResult.stdout || '';
+                stderr = retryResult.stderr || '';
+                // Retry succeeded — skip the looksInstalled check below
+              } catch (retryErr) {
+                const retryErrObj = retryErr as { stdout?: string; stderr?: string };
+                stdout = retryErrObj.stdout || '';
+                stderr = retryErrObj.stderr || '';
+                installSuccess = false;
+              }
+            } else {
+              // Check if the package actually installed despite the error.
+              // pnpm/npm write install progress to stdout before postinstall runs,
+              // so if we see install-complete indicators the failure is from postinstall
+              // (e.g. stderr warnings from dependencies), not from the install itself.
+              const looksInstalled =
+                stdout.includes('done') ||
+                stdout.includes('added') ||
+                stdout.includes('changed') ||
+                stdout.includes('reused') ||
+                stdout.includes('Already up to date');
 
-            if (!looksInstalled) {
-              installSuccess = false;
+              if (!looksInstalled) {
+                installSuccess = false;
+              }
             }
           }
 
