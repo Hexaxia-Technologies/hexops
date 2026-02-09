@@ -131,69 +131,125 @@ export async function POST(
         }
 
         try {
-          const { stdout, stderr } = await execAsync(installCmd, {
-            cwd,
-            timeout: 60000,
-          });
+          let stdout = '';
+          let stderr = '';
+          let installSuccess = true;
+
+          try {
+            const result = await execAsync(installCmd, {
+              cwd,
+              timeout: 60000,
+            });
+            stdout = result.stdout || '';
+            stderr = result.stderr || '';
+          } catch (execErr) {
+            const err = execErr as { stdout?: string; stderr?: string; code?: number; message?: string };
+            stdout = err.stdout || '';
+            stderr = err.stderr || '';
+
+            // Check if the package actually installed despite the error.
+            // pnpm/npm write install progress to stdout before postinstall runs,
+            // so if we see install-complete indicators the failure is from postinstall
+            // (e.g. stderr warnings from dependencies), not from the install itself.
+            const looksInstalled =
+              stdout.includes('done') ||
+              stdout.includes('added') ||
+              stdout.includes('changed') ||
+              stdout.includes('reused') ||
+              stdout.includes('Already up to date');
+
+            if (!looksInstalled) {
+              installSuccess = false;
+            }
+          }
+
           const output = `$ ${installCmd}\n${stdout}${stderr ? stderr : ''}`;
 
-          results.push({
-            package: pkg.name,
-            success: true,
-            output,
-          });
+          if (installSuccess) {
+            results.push({
+              package: pkg.name,
+              success: true,
+              output,
+            });
 
-          // Log to system logs
-          logger.info('patches', 'package_updated', `Updated ${pkg.name} to ${targetVersion}`, {
-            projectId: id,
-            meta: {
+            // Log to system logs
+            logger.info('patches', 'package_updated', `Updated ${pkg.name} to ${targetVersion}`, {
+              projectId: id,
+              meta: {
+                package: pkg.name,
+                fromVersion: pkg.fromVersion || 'unknown',
+                toVersion: targetVersion,
+                packageManager,
+              },
+            });
+
+            // Log to history
+            const historyEntry: PatchHistoryEntry = {
+              id: generatePatchId(),
+              timestamp: new Date().toISOString(),
+              projectId: id,
               package: pkg.name,
               fromVersion: pkg.fromVersion || 'unknown',
               toVersion: targetVersion,
-              packageManager,
-            },
-          });
+              updateType: pkg.fromVersion
+                ? getUpdateType(pkg.fromVersion, targetVersion)
+                : 'patch',
+              trigger: 'manual',
+              success: true,
+              output,
+            };
+            addPatchHistoryEntry(historyEntry);
+          } else {
+            const error = stderr || 'Update failed';
 
-          // Log to history
-          const historyEntry: PatchHistoryEntry = {
-            id: generatePatchId(),
-            timestamp: new Date().toISOString(),
-            projectId: id,
-            package: pkg.name,
-            fromVersion: pkg.fromVersion || 'unknown',
-            toVersion: targetVersion,
-            updateType: pkg.fromVersion
-              ? getUpdateType(pkg.fromVersion, targetVersion)
-              : 'patch',
-            trigger: 'manual',
-            success: true,
-            output,
-          };
-          addPatchHistoryEntry(historyEntry);
+            results.push({
+              package: pkg.name,
+              success: false,
+              output,
+              error,
+            });
+
+            // Log failure to system logs
+            logger.error('patches', 'package_update_failed', `Failed to update ${pkg.name}: ${error}`, {
+              projectId: id,
+              meta: {
+                package: pkg.name,
+                fromVersion: pkg.fromVersion || 'unknown',
+                toVersion: targetVersion,
+                error,
+              },
+            });
+
+            // Log failure to history
+            const historyEntry: PatchHistoryEntry = {
+              id: generatePatchId(),
+              timestamp: new Date().toISOString(),
+              projectId: id,
+              package: pkg.name,
+              fromVersion: pkg.fromVersion || 'unknown',
+              toVersion: targetVersion,
+              updateType: pkg.fromVersion
+                ? getUpdateType(pkg.fromVersion, targetVersion)
+                : 'patch',
+              trigger: 'manual',
+              success: false,
+              output,
+              error,
+            };
+            addPatchHistoryEntry(historyEntry);
+          }
         } catch (err) {
-          const execErr = err as { stdout?: string; stderr?: string; message?: string };
-          const output = `$ ${installCmd}\n${execErr.stdout || ''}${execErr.stderr || ''}`;
+          const execErr = err as { message?: string };
           const error = execErr.message || 'Update failed';
 
           results.push({
             package: pkg.name,
             success: false,
-            output,
+            output: '',
             error,
           });
 
-          // Log failure to system logs
-          logger.error('patches', 'package_update_failed', `Failed to update ${pkg.name}: ${error}`, {
-            projectId: id,
-            meta: {
-              package: pkg.name,
-              fromVersion: pkg.fromVersion || 'unknown',
-              toVersion: targetVersion,
-              error,
-            },
-          });
-
-          // Log failure to history
+          // Log unexpected failure to history
           const historyEntry: PatchHistoryEntry = {
             id: generatePatchId(),
             timestamp: new Date().toISOString(),
@@ -206,7 +262,7 @@ export async function POST(
               : 'patch',
             trigger: 'manual',
             success: false,
-            output,
+            output: '',
             error,
           };
           addPatchHistoryEntry(historyEntry);
