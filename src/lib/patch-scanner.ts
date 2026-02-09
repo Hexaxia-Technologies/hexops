@@ -1,6 +1,6 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import type {
   ProjectConfig,
@@ -220,6 +220,16 @@ export async function scanVulnerabilities(
           effects?: string[];
         };
 
+        // Read installed version from node_modules when not provided in audit output
+        let currentVersion: string | undefined;
+        try {
+          const pkgJsonPath = join(project.path, 'node_modules', name, 'package.json');
+          if (existsSync(pkgJsonPath)) {
+            const pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf-8'));
+            currentVersion = pkgJson.version;
+          }
+        } catch { /* ignore - package may not be installed locally */ }
+
         // Extract title and advisory info from via (can be string or object with title)
         let title = 'Vulnerability';
         let advisoryId: number | undefined;
@@ -257,6 +267,11 @@ export async function scanVulnerabilities(
           }
         }
 
+        // When fixAvailable is boolean true but no version info, fall back to 'latest'
+        if (!fixVersion && fixAvailable) {
+          fixVersion = 'latest';
+        }
+
         // Transitive deps where user can't directly fix are "unfixable"
         if (!vuln.isDirect && parentPackage) {
           // User can't directly fix transitive deps - parent package needs to update
@@ -270,6 +285,7 @@ export async function scanVulnerabilities(
           path: name,
           fixAvailable,
           fixVersion,
+          currentVersion,
           isDirect: vuln.isDirect ?? true,
           via: viaChain?.length > 0 ? viaChain : undefined,
           parentPackage,
