@@ -1,40 +1,51 @@
 ---
 name: Bug Report
 about: Report a bug or unexpected behavior
-title: '[Bug] '
+title: 'bug: '
 labels: bug
 assignees: ''
 ---
 
-## Description
+## Problem
 
-A clear description of the bug.
+A clear description of what's broken and how it manifests.
+
+## Root Cause
+
+If known, explain why the bug occurs. Reference specific files and line numbers.
+
+## Impact
+
+What breaks as a result? How does this affect users or other system behavior?
 
 ## Steps to Reproduce
 
-1. Go to '...'
-2. Click on '...'
-3. See error
+1. ...
+2. ...
+3. Observe: ...
 
 ## Expected Behavior
 
-What you expected to happen.
+What should happen instead.
 
-## Actual Behavior
+## Affected Files
 
-What actually happened.
+- `src/lib/example.ts` — description of relevance
+- `src/app/example/page.tsx` — description of relevance
 
-## Environment
+## Proposed Fix
 
-- OS: [e.g., macOS 14, Ubuntu 24.04]
-- Node.js version: [e.g., 20.10.0]
-- HexOps version: [e.g., 0.9.0]
-- Browser: [e.g., Chrome 120]
+Describe the recommended approach. Include code snippets if helpful.
 
-## Screenshots
+## Acceptance Criteria
 
-If applicable, add screenshots to help explain the problem.
+- [ ] ...
+- [ ] ...
 
-## Additional Context
+## Resolution
 
-Any other relevant information.
+_Fill in after the fix is merged._
+
+- **Commit:** `abc1234`
+- **Approach:** Brief description of what was done
+- **Verified:** How it was tested

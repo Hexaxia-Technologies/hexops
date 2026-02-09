@@ -1,27 +1,29 @@
 ---
 name: Feature Request
 about: Suggest a new feature or improvement
-title: '[Feature] '
+title: 'feat: '
 labels: enhancement
 assignees: ''
 ---
 
 ## Problem
 
-Describe the problem this feature would solve. What's frustrating or missing?
+What's frustrating, missing, or could be improved?
 
 ## Proposed Solution
 
-Describe what you'd like to see. How would it work?
+How should it work? Include UI/UX details, API changes, or architecture notes.
+
+## Affected Files
+
+- `src/lib/example.ts` — description of relevance
+- `src/app/example/page.tsx` — description of relevance
 
 ## Alternatives Considered
 
-Any alternative solutions or workarounds you've considered.
+Any alternative approaches and why they were ruled out.
 
-## Use Case
+## Acceptance Criteria
 
-How would you use this feature in your workflow?
-
-## Additional Context
-
-Any other relevant information, mockups, or examples.
+- [ ] ...
+- [ ] ...
