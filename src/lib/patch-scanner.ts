@@ -437,8 +437,10 @@ export function buildPriorityQueue(
       else if (highestSeverity === 'moderate') summary.moderate++;
     }
 
-    // Process outdated packages
+    // Process outdated packages (skip if already covered by a vulnerability entry)
     for (const pkg of cache.outdated) {
+      if (vulnsByPackage.has(pkg.name)) continue;
+
       const updateType = getUpdateType(pkg.current, pkg.latest);
       const isHeld = projectHolds.includes(pkg.name);
 
