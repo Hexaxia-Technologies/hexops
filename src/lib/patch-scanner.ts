@@ -131,7 +131,13 @@ export async function scanOutdated(
       }
     }
 
-    return result;
+    // Filter out packages where current version already matches latest
+    // (can happen with workspace edge cases or lock file mismatches)
+    return result.filter(pkg => {
+      const current = pkg.current?.replace(/^[\^~]/, '');
+      const latest = pkg.latest?.replace(/^[\^~]/, '');
+      return current !== latest;
+    });
   } catch (error) {
     console.error(`Failed to scan outdated for ${project.id}:`, error);
     return [];
@@ -440,6 +446,11 @@ export function buildPriorityQueue(
     // Process outdated packages (skip if already covered by a vulnerability entry)
     for (const pkg of cache.outdated) {
       if (vulnsByPackage.has(pkg.name)) continue;
+
+      // Skip packages where current version matches latest (no actual update)
+      const cleanCurrent = pkg.current?.replace(/^[\^~]/, '');
+      const cleanLatest = pkg.latest?.replace(/^[\^~]/, '');
+      if (cleanCurrent && cleanLatest && cleanCurrent === cleanLatest) continue;
 
       const updateType = getUpdateType(pkg.current, pkg.latest);
       const isHeld = projectHolds.includes(pkg.name);
