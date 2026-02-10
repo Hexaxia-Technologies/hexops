@@ -321,6 +321,24 @@ export async function POST(
       }
     }
 
+    // Reconcile lockfile after updates to prevent CI frozen-lockfile failures
+    // (pnpm add can update the lockfile specifier without updating package.json
+    // when the existing range already satisfies the target version)
+    const anySucceeded = results.some(r => r.success);
+    if (anySucceeded) {
+      try {
+        const installCmd = packageManager === 'pnpm'
+          ? 'pnpm install --no-frozen-lockfile'
+          : packageManager === 'npm'
+          ? 'npm install'
+          : 'yarn install';
+
+        await execAsync(installCmd, { cwd, timeout: 60000 });
+      } catch {
+        // Non-fatal: lockfile may already be in sync
+      }
+    }
+
     // Invalidate caches for this project
     invalidateProjectCache(id);
     invalidatePackageStatusCache(cwd);
