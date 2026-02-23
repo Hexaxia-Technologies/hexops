@@ -16,6 +16,43 @@ import type { PatchHistoryEntry } from '@/lib/types';
 
 const execAsync = promisify(exec);
 
+const NPM_INSTALL_TIMEOUT = 120000; // 2 minutes per package
+const ARBORIST_ERROR_PATTERNS = [
+  'ERESOLVE',
+  "Cannot read properties of null",
+  'TypeError: Cannot read properties',
+];
+
+function isArboristError(stderr: string, message?: string): boolean {
+  const text = `${stderr}\n${message || ''}`;
+  return ARBORIST_ERROR_PATTERNS.some(pattern => text.includes(pattern));
+}
+
+async function checkNodeModulesHealth(cwd: string): Promise<{ healthy: boolean; reason?: string }> {
+  try {
+    const { stderr } = await execAsync('npm ls --depth=0 --json 2>&1 || true', {
+      cwd,
+      timeout: 30000,
+    });
+    if (stderr.includes('Cannot read properties of null') || stderr.includes('ERR!')) {
+      return { healthy: false, reason: 'Corrupted dependency tree detected' };
+    }
+    return { healthy: true };
+  } catch {
+    return { healthy: false, reason: 'Unable to read dependency tree' };
+  }
+}
+
+async function cleanNodeModules(cwd: string): Promise<boolean> {
+  try {
+    await execAsync('rm -rf node_modules package-lock.json', { cwd, timeout: 30000 });
+    await execAsync('npm install --legacy-peer-deps', { cwd, timeout: 180000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 interface UpdateRequestBody {
   packages?: Array<{
     name: string;
@@ -86,206 +123,211 @@ export async function POST(
       error?: string;
     }> = [];
 
+    // Pre-flight: check node_modules health for npm projects before batch updates
+    if (packageManager === 'npm' && packages.length > 1) {
+      const health = await checkNodeModulesHealth(cwd);
+      if (!health.healthy) {
+        logger.warn('patches', 'preflight_unhealthy', `${health.reason} in ${id}, running clean reinstall`, {
+          projectId: id,
+        });
+        await cleanNodeModules(cwd);
+      }
+    }
+
     if (packages.length > 0) {
-      // Update specific packages
+      // Validate all packages first
+      const validPackages: Array<{ name: string; fromVersion?: string; targetVersion: string }> = [];
       for (const pkg of packages) {
-        // Sanitize package name
         if (!/^[@a-z0-9][\w\-./@]*$/i.test(pkg.name)) {
-          results.push({
-            package: pkg.name,
-            success: false,
-            output: '',
-            error: 'Invalid package name',
-          });
+          results.push({ package: pkg.name, success: false, output: '', error: 'Invalid package name' });
           continue;
         }
-
-        // Sanitize version - only allow valid semver-like versions
         const targetVersion = pkg.toVersion || 'latest';
         if (!/^(latest|next|canary|[\w\-.^~<>=|@]+)$/i.test(targetVersion)) {
-          results.push({
-            package: pkg.name,
-            success: false,
-            output: '',
-            error: 'Invalid version specifier',
-          });
+          results.push({ package: pkg.name, success: false, output: '', error: 'Invalid version specifier' });
           continue;
         }
+        validPackages.push({ name: pkg.name, fromVersion: pkg.fromVersion, targetVersion });
+      }
 
-        let installCmd: string;
+      if (validPackages.length > 0) {
+        // Build batched install command — single tree resolution for all packages
+        const pkgSpecs = validPackages.map(p => `${p.name}@${p.targetVersion}`);
+        let batchCmd: string;
         if (packageManager === 'pnpm') {
-          // pnpm -w flag for workspace root, -r for recursive workspaces
-          installCmd = isWorkspaceProject
-            ? `pnpm add ${pkg.name}@${targetVersion} -r`
-            : `pnpm add ${pkg.name}@${targetVersion}`;
+          const specs = pkgSpecs.join(' ');
+          batchCmd = isWorkspaceProject ? `pnpm add ${specs} -r` : `pnpm add ${specs}`;
         } else if (packageManager === 'npm') {
-          // npm --workspaces flag to update across all workspaces
-          installCmd = isWorkspaceProject
-            ? `npm install ${pkg.name}@${targetVersion} --workspaces --include-workspace-root`
-            : `npm install ${pkg.name}@${targetVersion}`;
+          const specs = pkgSpecs.join(' ');
+          batchCmd = isWorkspaceProject
+            ? `npm install ${specs} --legacy-peer-deps --workspaces --include-workspace-root`
+            : `npm install ${specs} --legacy-peer-deps`;
         } else {
-          // yarn workspaces foreach for workspace projects
-          installCmd = isWorkspaceProject
-            ? `yarn workspaces foreach add ${pkg.name}@${targetVersion}`
-            : `yarn add ${pkg.name}@${targetVersion}`;
+          const specs = pkgSpecs.join(' ');
+          batchCmd = isWorkspaceProject
+            ? `yarn workspaces foreach add ${specs}`
+            : `yarn add ${specs}`;
         }
 
+        let batchSuccess = false;
+        let batchStdout = '';
+        let batchStderr = '';
+
         try {
-          let stdout = '';
-          let stderr = '';
-          let installSuccess = true;
+          const result = await execAsync(batchCmd, { cwd, timeout: NPM_INSTALL_TIMEOUT });
+          batchStdout = result.stdout || '';
+          batchStderr = result.stderr || '';
+          batchSuccess = true;
+        } catch (execErr) {
+          const err = execErr as { stdout?: string; stderr?: string; message?: string };
+          batchStdout = err.stdout || '';
+          batchStderr = err.stderr || '';
 
-          try {
-            const result = await execAsync(installCmd, {
-              cwd,
-              timeout: 60000,
+          // Check if it looks like it worked despite exit code (postinstall warnings etc.)
+          const looksInstalled =
+            batchStdout.includes('added') ||
+            batchStdout.includes('changed') ||
+            batchStdout.includes('up to date');
+
+          if (looksInstalled) {
+            batchSuccess = true;
+          } else if (packageManager === 'npm' && isArboristError(batchStderr, err.message)) {
+            // Arborist crash — clean reinstall then retry batch
+            logger.warn('patches', 'arborist_error', `Arborist error on batch install, attempting clean reinstall`, {
+              projectId: id,
+              meta: { packages: pkgSpecs.join(', '), error: (batchStderr || err.message || '').slice(0, 500) },
             });
-            stdout = result.stdout || '';
-            stderr = result.stderr || '';
-          } catch (execErr) {
-            const err = execErr as { stdout?: string; stderr?: string; code?: number; message?: string };
-            stdout = err.stdout || '';
-            stderr = err.stderr || '';
 
-            // npm ERESOLVE: peer dependency conflict blocks the entire install.
-            // Retry with --legacy-peer-deps to skip unrelated peer dep validation.
-            if (packageManager === 'npm' && stderr.includes('ERESOLVE')) {
+            const cleaned = await cleanNodeModules(cwd);
+            if (cleaned) {
               try {
-                const retryCmd = `${installCmd} --legacy-peer-deps`;
-                const retryResult = await execAsync(retryCmd, {
-                  cwd,
-                  timeout: 60000,
-                });
-                stdout = retryResult.stdout || '';
-                stderr = retryResult.stderr || '';
-                // Retry succeeded — skip the looksInstalled check below
+                const retryResult = await execAsync(batchCmd, { cwd, timeout: NPM_INSTALL_TIMEOUT });
+                batchStdout = retryResult.stdout || '';
+                batchStderr = retryResult.stderr || '';
+                batchSuccess = true;
               } catch (retryErr) {
                 const retryErrObj = retryErr as { stdout?: string; stderr?: string };
-                stdout = retryErrObj.stdout || '';
-                stderr = retryErrObj.stderr || '';
-                installSuccess = false;
-              }
-            } else {
-              // Check if the package actually installed despite the error.
-              // pnpm/npm write install progress to stdout before postinstall runs,
-              // so if we see install-complete indicators the failure is from postinstall
-              // (e.g. stderr warnings from dependencies), not from the install itself.
-              const looksInstalled =
-                stdout.includes('done') ||
-                stdout.includes('added') ||
-                stdout.includes('changed') ||
-                stdout.includes('reused') ||
-                stdout.includes('Already up to date');
-
-              if (!looksInstalled) {
-                installSuccess = false;
+                batchStdout = retryErrObj.stdout || '';
+                batchStderr = retryErrObj.stderr || '';
               }
             }
           }
+        }
 
-          const output = `$ ${installCmd}\n${stdout}${stderr ? stderr : ''}`;
+        const batchOutput = `$ ${batchCmd}\n${batchStdout}${batchStderr ? batchStderr : ''}`;
 
-          if (installSuccess) {
-            results.push({
-              package: pkg.name,
-              success: true,
-              output,
-            });
+        if (batchSuccess) {
+          // Batch succeeded — record success for all packages
+          for (const pkg of validPackages) {
+            results.push({ package: pkg.name, success: true, output: batchOutput });
 
-            // Log to system logs
-            logger.info('patches', 'package_updated', `Updated ${pkg.name} to ${targetVersion}`, {
+            logger.info('patches', 'package_updated', `Updated ${pkg.name} to ${pkg.targetVersion}`, {
               projectId: id,
-              meta: {
-                package: pkg.name,
-                fromVersion: pkg.fromVersion || 'unknown',
-                toVersion: targetVersion,
-                packageManager,
-              },
+              meta: { package: pkg.name, fromVersion: pkg.fromVersion || 'unknown', toVersion: pkg.targetVersion, packageManager },
             });
 
-            // Log to history
-            const historyEntry: PatchHistoryEntry = {
+            addPatchHistoryEntry({
               id: generatePatchId(),
               timestamp: new Date().toISOString(),
               projectId: id,
               package: pkg.name,
               fromVersion: pkg.fromVersion || 'unknown',
-              toVersion: targetVersion,
-              updateType: pkg.fromVersion
-                ? getUpdateType(pkg.fromVersion, targetVersion)
-                : 'patch',
+              toVersion: pkg.targetVersion,
+              updateType: pkg.fromVersion ? getUpdateType(pkg.fromVersion, pkg.targetVersion) : 'patch',
               trigger: 'manual',
               success: true,
-              output,
-            };
-            addPatchHistoryEntry(historyEntry);
-          } else {
-            const error = stderr || 'Update failed';
-
-            results.push({
-              package: pkg.name,
-              success: false,
-              output,
-              error,
+              output: batchOutput,
             });
-
-            // Log failure to system logs
-            logger.error('patches', 'package_update_failed', `Failed to update ${pkg.name}: ${error}`, {
-              projectId: id,
-              meta: {
-                package: pkg.name,
-                fromVersion: pkg.fromVersion || 'unknown',
-                toVersion: targetVersion,
-                error,
-              },
-            });
-
-            // Log failure to history
-            const historyEntry: PatchHistoryEntry = {
-              id: generatePatchId(),
-              timestamp: new Date().toISOString(),
-              projectId: id,
-              package: pkg.name,
-              fromVersion: pkg.fromVersion || 'unknown',
-              toVersion: targetVersion,
-              updateType: pkg.fromVersion
-                ? getUpdateType(pkg.fromVersion, targetVersion)
-                : 'patch',
-              trigger: 'manual',
-              success: false,
-              output,
-              error,
-            };
-            addPatchHistoryEntry(historyEntry);
           }
-        } catch (err) {
-          const execErr = err as { message?: string };
-          const error = execErr.message || 'Update failed';
-
-          results.push({
-            package: pkg.name,
-            success: false,
-            output: '',
-            error,
+        } else {
+          // Batch failed — fall back to sequential installs to identify which packages fail
+          logger.warn('patches', 'batch_fallback', `Batch install failed for ${id}, falling back to sequential`, {
+            projectId: id,
           });
 
-          // Log unexpected failure to history
-          const historyEntry: PatchHistoryEntry = {
-            id: generatePatchId(),
-            timestamp: new Date().toISOString(),
-            projectId: id,
-            package: pkg.name,
-            fromVersion: pkg.fromVersion || 'unknown',
-            toVersion: targetVersion,
-            updateType: pkg.fromVersion
-              ? getUpdateType(pkg.fromVersion, targetVersion)
-              : 'patch',
-            trigger: 'manual',
-            success: false,
-            output: '',
-            error,
-          };
-          addPatchHistoryEntry(historyEntry);
+          for (const pkg of validPackages) {
+            let installCmd: string;
+            if (packageManager === 'pnpm') {
+              installCmd = isWorkspaceProject
+                ? `pnpm add ${pkg.name}@${pkg.targetVersion} -r`
+                : `pnpm add ${pkg.name}@${pkg.targetVersion}`;
+            } else if (packageManager === 'npm') {
+              installCmd = isWorkspaceProject
+                ? `npm install ${pkg.name}@${pkg.targetVersion} --legacy-peer-deps --workspaces --include-workspace-root`
+                : `npm install ${pkg.name}@${pkg.targetVersion} --legacy-peer-deps`;
+            } else {
+              installCmd = isWorkspaceProject
+                ? `yarn workspaces foreach add ${pkg.name}@${pkg.targetVersion}`
+                : `yarn add ${pkg.name}@${pkg.targetVersion}`;
+            }
+
+            try {
+              const result = await execAsync(installCmd, { cwd, timeout: NPM_INSTALL_TIMEOUT });
+              const output = `$ ${installCmd}\n${result.stdout || ''}${result.stderr || ''}`;
+
+              results.push({ package: pkg.name, success: true, output });
+
+              logger.info('patches', 'package_updated', `Updated ${pkg.name} to ${pkg.targetVersion}`, {
+                projectId: id,
+                meta: { package: pkg.name, fromVersion: pkg.fromVersion || 'unknown', toVersion: pkg.targetVersion, packageManager },
+              });
+
+              addPatchHistoryEntry({
+                id: generatePatchId(),
+                timestamp: new Date().toISOString(),
+                projectId: id,
+                package: pkg.name,
+                fromVersion: pkg.fromVersion || 'unknown',
+                toVersion: pkg.targetVersion,
+                updateType: pkg.fromVersion ? getUpdateType(pkg.fromVersion, pkg.targetVersion) : 'patch',
+                trigger: 'manual',
+                success: true,
+                output,
+              });
+            } catch (err) {
+              const execErr = err as { stdout?: string; stderr?: string; message?: string };
+              const stdout = execErr.stdout || '';
+              const stderr = execErr.stderr || '';
+              const output = `$ ${installCmd}\n${stdout}${stderr}`;
+              const error = stderr || execErr.message || 'Update failed';
+
+              // Check if it actually installed despite error
+              const looksInstalled =
+                stdout.includes('done') || stdout.includes('added') ||
+                stdout.includes('changed') || stdout.includes('reused') ||
+                stdout.includes('Already up to date');
+
+              const success = looksInstalled;
+
+              results.push({ package: pkg.name, success, output, error: success ? undefined : error });
+
+              if (success) {
+                logger.info('patches', 'package_updated', `Updated ${pkg.name} to ${pkg.targetVersion} (with warnings)`, {
+                  projectId: id,
+                  meta: { package: pkg.name, fromVersion: pkg.fromVersion || 'unknown', toVersion: pkg.targetVersion, packageManager },
+                });
+              } else {
+                logger.error('patches', 'package_update_failed', `Failed to update ${pkg.name}: ${error}`, {
+                  projectId: id,
+                  meta: { package: pkg.name, fromVersion: pkg.fromVersion || 'unknown', toVersion: pkg.targetVersion, error },
+                });
+              }
+
+              addPatchHistoryEntry({
+                id: generatePatchId(),
+                timestamp: new Date().toISOString(),
+                projectId: id,
+                package: pkg.name,
+                fromVersion: pkg.fromVersion || 'unknown',
+                toVersion: pkg.targetVersion,
+                updateType: pkg.fromVersion ? getUpdateType(pkg.fromVersion, pkg.targetVersion) : 'patch',
+                trigger: 'manual',
+                success,
+                output,
+                error: success ? undefined : error,
+              });
+            }
+          }
         }
       }
     } else {
@@ -294,7 +336,9 @@ export async function POST(
       if (packageManager === 'pnpm') {
         cmd = isWorkspaceProject ? 'pnpm update -r' : 'pnpm update';
       } else if (packageManager === 'npm') {
-        cmd = isWorkspaceProject ? 'npm update --workspaces --include-workspace-root' : 'npm update';
+        cmd = isWorkspaceProject
+          ? 'npm update --legacy-peer-deps --workspaces --include-workspace-root'
+          : 'npm update --legacy-peer-deps';
       } else {
         cmd = isWorkspaceProject ? 'yarn workspaces foreach upgrade' : 'yarn upgrade';
       }
@@ -302,7 +346,7 @@ export async function POST(
       try {
         const { stdout, stderr } = await execAsync(cmd, {
           cwd,
-          timeout: 120000,
+          timeout: 180000,
         });
 
         results.push({
@@ -327,13 +371,13 @@ export async function POST(
     const anySucceeded = results.some(r => r.success);
     if (anySucceeded) {
       try {
-        const installCmd = packageManager === 'pnpm'
+        const reconcileCmd = packageManager === 'pnpm'
           ? 'pnpm install --no-frozen-lockfile'
           : packageManager === 'npm'
-          ? 'npm install'
+          ? 'npm install --legacy-peer-deps'
           : 'yarn install';
 
-        await execAsync(installCmd, { cwd, timeout: 60000 });
+        await execAsync(reconcileCmd, { cwd, timeout: NPM_INSTALL_TIMEOUT });
       } catch {
         // Non-fatal: lockfile may already be in sync
       }
