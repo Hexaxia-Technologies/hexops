@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getProject } from '@/lib/config';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { existsSync } from 'fs';
 import { join } from 'path';
 import { auditCache } from '../package-health/route';
+import { detectPackageManager } from '@/lib/patch-scanner';
 
 const execAsync = promisify(exec);
 
@@ -34,13 +34,9 @@ export async function POST(
     const cwd = project.path;
     const vulnerabilities: Vulnerability[] = [];
 
-    // Check for lockfiles to determine which package manager to use
-    const hasPnpmLock = existsSync(join(cwd, 'pnpm-lock.yaml'));
-    const hasNpmLock = existsSync(join(cwd, 'package-lock.json'));
-    const hasYarnLock = existsSync(join(cwd, 'yarn.lock'));
+    const pm = detectPackageManager(cwd);
 
-    if (!hasPnpmLock && !hasNpmLock && !hasYarnLock) {
-      // No lockfile found - return helpful message
+    if (!pm) {
       const rawOutput = `No lockfile found in ${cwd}
 
 To run a security audit, run one of these commands in the project directory:
@@ -59,33 +55,19 @@ To run a security audit, run one of these commands in the project directory:
     try {
       // Use the appropriate package manager based on lockfile
       let auditOutput: string;
+      const auditCmd = pm === 'pnpm'
+        ? 'pnpm audit --json'
+        : pm === 'npm'
+        ? 'npm audit --json'
+        : 'yarn audit --json';
 
-      if (hasPnpmLock) {
-        try {
-          const { stdout } = await execAsync('pnpm audit --json', { cwd });
-          auditOutput = stdout;
-        } catch (pnpmError: unknown) {
-          // pnpm audit returns non-zero exit code if vulnerabilities found
-          const pnpmErr = pnpmError as { stdout?: string };
-          auditOutput = pnpmErr.stdout || '{}';
-        }
-      } else if (hasNpmLock) {
-        try {
-          const { stdout } = await execAsync('npm audit --json', { cwd });
-          auditOutput = stdout;
-        } catch (npmError: unknown) {
-          const npmErr = npmError as { stdout?: string };
-          auditOutput = npmErr.stdout || '{}';
-        }
-      } else {
-        // yarn
-        try {
-          const { stdout } = await execAsync('yarn audit --json', { cwd });
-          auditOutput = stdout;
-        } catch (yarnError: unknown) {
-          const yarnErr = yarnError as { stdout?: string };
-          auditOutput = yarnErr.stdout || '{}';
-        }
+      try {
+        const { stdout } = await execAsync(auditCmd, { cwd });
+        auditOutput = stdout;
+      } catch (err: unknown) {
+        // These commands return non-zero exit code if vulnerabilities found
+        const execErr = err as { stdout?: string };
+        auditOutput = execErr.stdout || '{}';
       }
 
       // Parse audit output - strip any warnings before JSON
@@ -137,7 +119,7 @@ To run a security audit, run one of these commands in the project directory:
 
     // Get human-readable output for display
     let rawOutput = '';
-    const cmd = hasPnpmLock ? 'pnpm audit' : hasNpmLock ? 'npm audit' : 'yarn audit';
+    const cmd = pm === 'pnpm' ? 'pnpm audit' : pm === 'npm' ? 'npm audit' : 'yarn audit';
     try {
       const { stdout, stderr } = await execAsync(`${cmd} 2>&1 || true`, { cwd });
       rawOutput = stdout || stderr || 'No output';

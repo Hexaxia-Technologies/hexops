@@ -1,6 +1,6 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import type {
   ProjectConfig,
@@ -27,10 +27,23 @@ type PackageManager = 'pnpm' | 'npm' | 'yarn';
  * Detect package manager from lockfile
  */
 export function detectPackageManager(projectPath: string): PackageManager | null {
-  if (existsSync(join(projectPath, 'pnpm-lock.yaml'))) return 'pnpm';
-  if (existsSync(join(projectPath, 'package-lock.json'))) return 'npm';
-  if (existsSync(join(projectPath, 'yarn.lock'))) return 'yarn';
-  return null;
+  const locks = [
+    { pm: 'pnpm' as const, file: 'pnpm-lock.yaml' },
+    { pm: 'npm' as const, file: 'package-lock.json' },
+    { pm: 'yarn' as const, file: 'yarn.lock' },
+  ];
+
+  const found = locks
+    .map(l => {
+      const p = join(projectPath, l.file);
+      if (!existsSync(p)) return null;
+      return { pm: l.pm, mtime: statSync(p).mtimeMs };
+    })
+    .filter(Boolean);
+
+  if (found.length === 0) return null;
+  // Most recently modified lockfile wins
+  return found.sort((a, b) => b!.mtime - a!.mtime)[0]!.pm;
 }
 
 /**

@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getProjects, getCategories } from '@/lib/config';
 import { scanProject, buildPriorityQueue } from '@/lib/patch-scanner';
 import { writePatchState, readPatchState } from '@/lib/patch-storage';
+import { clearAllInMemoryCaches } from '@/app/api/projects/[id]/package-health/route';
 import type { ProjectPatchCache } from '@/lib/types';
 
 export async function POST(_request: NextRequest) {
   try {
+    clearAllInMemoryCaches();
     const allProjects = getProjects();
     const categories = getCategories();
     const failedProjects: string[] = [];

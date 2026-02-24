@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getProject } from '@/lib/config';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { existsSync } from 'fs';
 import { join } from 'path';
 import { outdatedCache } from '../package-health/route';
+import { detectPackageManager } from '@/lib/patch-scanner';
 
 const execAsync = promisify(exec);
 
@@ -32,13 +32,9 @@ export async function POST(
     const cwd = project.path;
     const outdatedInfo: Record<string, OutdatedInfo> = {};
 
-    // Check for lockfiles to determine which package manager to use
-    const hasPnpmLock = existsSync(join(cwd, 'pnpm-lock.yaml'));
-    const hasNpmLock = existsSync(join(cwd, 'package-lock.json'));
-    const hasYarnLock = existsSync(join(cwd, 'yarn.lock'));
+    const pm = detectPackageManager(cwd);
 
-    if (!hasPnpmLock && !hasNpmLock && !hasYarnLock) {
-      // No lockfile found - return helpful message
+    if (!pm) {
       const rawOutput = `No lockfile found in ${cwd}
 
 To check for outdated packages, run one of these commands in the project directory:
@@ -57,33 +53,19 @@ To check for outdated packages, run one of these commands in the project directo
     try {
       // Use the appropriate package manager based on lockfile
       let outdatedOutput: string;
+      const outdatedCmd = pm === 'pnpm'
+        ? 'pnpm outdated --format json'
+        : pm === 'npm'
+        ? 'npm outdated --json'
+        : 'yarn outdated --json';
 
-      if (hasPnpmLock) {
-        try {
-          const { stdout } = await execAsync('pnpm outdated --format json', { cwd });
-          outdatedOutput = stdout;
-        } catch (pnpmError: unknown) {
-          // pnpm outdated returns non-zero exit code if outdated packages found
-          const pnpmErr = pnpmError as { stdout?: string; stderr?: string };
-          outdatedOutput = pnpmErr.stdout || '{}';
-        }
-      } else if (hasNpmLock) {
-        try {
-          const { stdout } = await execAsync('npm outdated --json', { cwd });
-          outdatedOutput = stdout;
-        } catch (npmError: unknown) {
-          const npmErr = npmError as { stdout?: string };
-          outdatedOutput = npmErr.stdout || '{}';
-        }
-      } else {
-        // yarn
-        try {
-          const { stdout } = await execAsync('yarn outdated --json', { cwd });
-          outdatedOutput = stdout;
-        } catch (yarnError: unknown) {
-          const yarnErr = yarnError as { stdout?: string };
-          outdatedOutput = yarnErr.stdout || '{}';
-        }
+      try {
+        const { stdout } = await execAsync(outdatedCmd, { cwd });
+        outdatedOutput = stdout;
+      } catch (err: unknown) {
+        // These commands return non-zero exit code if outdated packages found
+        const execErr = err as { stdout?: string };
+        outdatedOutput = execErr.stdout || '{}';
       }
 
       // Parse outdated output - strip any warnings before JSON
@@ -119,7 +101,7 @@ To check for outdated packages, run one of these commands in the project directo
 
     // Get human-readable output for display
     let rawOutput = '';
-    const cmd = hasPnpmLock ? 'pnpm outdated' : hasNpmLock ? 'npm outdated' : 'yarn outdated';
+    const cmd = pm === 'pnpm' ? 'pnpm outdated' : pm === 'npm' ? 'npm outdated' : 'yarn outdated';
     try {
       const { stdout, stderr } = await execAsync(`${cmd} 2>&1 || true`, { cwd });
       rawOutput = stdout || stderr || 'All packages are up to date';

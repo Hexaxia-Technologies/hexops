@@ -9,8 +9,9 @@ import {
   generatePatchId,
   invalidateProjectCache,
 } from '@/lib/patch-storage';
-import { getUpdateType } from '@/lib/patch-scanner';
+import { getUpdateType, detectPackageManager } from '@/lib/patch-scanner';
 import { invalidatePackageStatusCache } from '@/lib/extended-status';
+import { clearInMemoryCache } from '@/app/api/projects/[id]/package-health/route';
 import { logger } from '@/lib/logger';
 import type { PatchHistoryEntry } from '@/lib/types';
 
@@ -81,10 +82,16 @@ export async function POST(
 
     const cwd = project.path;
 
-    // Check for lockfiles to determine which package manager to use
-    const hasPnpmLock = existsSync(join(cwd, 'pnpm-lock.yaml'));
-    const hasNpmLock = existsSync(join(cwd, 'package-lock.json'));
-    const hasYarnLock = existsSync(join(cwd, 'yarn.lock'));
+    // Detect package manager from lockfile (newest lockfile wins when multiple exist)
+    const packageManager = detectPackageManager(cwd);
+
+    if (!packageManager) {
+      return NextResponse.json({
+        success: false,
+        error: 'No lockfile found. Run install first.',
+        output: `No lockfile found in ${cwd}`,
+      });
+    }
 
     // Check if this is a workspace project (has workspaces in package.json)
     let isWorkspaceProject = false;
@@ -96,24 +103,6 @@ export async function POST(
       }
     } catch {
       // Ignore errors reading package.json
-    }
-
-    if (!hasPnpmLock && !hasNpmLock && !hasYarnLock) {
-      return NextResponse.json({
-        success: false,
-        error: 'No lockfile found. Run install first.',
-        output: `No lockfile found in ${cwd}`,
-      });
-    }
-
-    // Determine package manager
-    let packageManager: string;
-    if (hasPnpmLock) {
-      packageManager = 'pnpm';
-    } else if (hasNpmLock) {
-      packageManager = 'npm';
-    } else {
-      packageManager = 'yarn';
     }
 
     const results: Array<{
@@ -386,6 +375,7 @@ export async function POST(
     // Invalidate caches for this project
     invalidateProjectCache(id);
     invalidatePackageStatusCache(cwd);
+    clearInMemoryCache(id);
 
     const allSucceeded = results.every(r => r.success);
     const output = results.map(r => r.output).join('\n\n');

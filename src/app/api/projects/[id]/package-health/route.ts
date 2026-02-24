@@ -94,3 +94,13 @@ export async function GET(
 
 // Export cache for use by audit and outdated routes
 export { auditCache, outdatedCache };
+
+export function clearInMemoryCache(projectId: string) {
+  auditCache.delete(projectId);
+  outdatedCache.delete(projectId);
+}
+
+export function clearAllInMemoryCaches() {
+  auditCache.clear();
+  outdatedCache.clear();
+}
