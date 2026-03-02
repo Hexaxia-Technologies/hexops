@@ -139,9 +139,52 @@ export async function POST(
         validPackages.push({ name: pkg.name, fromVersion: pkg.fromVersion, targetVersion });
       }
 
-      if (validPackages.length > 0) {
+      // Filter out transitive dependencies — only allow updates to packages
+      // that are actual direct dependencies in the project's package.json.
+      // Without this guard, `pnpm add <transitive-dep>` silently promotes the
+      // package to a direct dependency without actually fixing the vulnerability.
+      let directDeps: Set<string> = new Set();
+      try {
+        const pkgJsonPath = join(cwd, 'package.json');
+        if (existsSync(pkgJsonPath)) {
+          const pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf-8'));
+          const deps = Object.keys(pkgJson.dependencies || {});
+          const devDeps = Object.keys(pkgJson.devDependencies || {});
+          directDeps = new Set([...deps, ...devDeps]);
+        }
+      } catch {
+        // If we can't read package.json, skip the guard (fail open)
+      }
+
+      const transitivePkgs: typeof validPackages = [];
+      const directPkgs: typeof validPackages = [];
+
+      if (directDeps.size > 0) {
+        for (const pkg of validPackages) {
+          if (directDeps.has(pkg.name)) {
+            directPkgs.push(pkg);
+          } else {
+            transitivePkgs.push(pkg);
+            results.push({
+              package: pkg.name,
+              success: false,
+              output: '',
+              error: `Skipped: ${pkg.name} is a transitive dependency and cannot be updated directly. Update the parent package that depends on it, or add a package manager override.`,
+            });
+            logger.warn('patches', 'transitive_dep_skipped', `Skipped transitive dep ${pkg.name} in ${id} — not in dependencies/devDependencies`, {
+              projectId: id,
+              meta: { package: pkg.name, targetVersion: pkg.targetVersion },
+            });
+          }
+        }
+      } else {
+        // Couldn't determine direct deps — allow all (fail open)
+        directPkgs.push(...validPackages);
+      }
+
+      if (directPkgs.length > 0) {
         // Build batched install command — single tree resolution for all packages
-        const pkgSpecs = validPackages.map(p => `${p.name}@${p.targetVersion}`);
+        const pkgSpecs = directPkgs.map(p => `${p.name}@${p.targetVersion}`);
         let batchCmd: string;
         if (packageManager === 'pnpm') {
           const specs = pkgSpecs.join(' ');
@@ -207,7 +250,7 @@ export async function POST(
 
         if (batchSuccess) {
           // Batch succeeded — record success for all packages
-          for (const pkg of validPackages) {
+          for (const pkg of directPkgs) {
             results.push({ package: pkg.name, success: true, output: batchOutput });
 
             logger.info('patches', 'package_updated', `Updated ${pkg.name} to ${pkg.targetVersion}`, {
@@ -234,7 +277,7 @@ export async function POST(
             projectId: id,
           });
 
-          for (const pkg of validPackages) {
+          for (const pkg of directPkgs) {
             let installCmd: string;
             if (packageManager === 'pnpm') {
               installCmd = isWorkspaceProject
