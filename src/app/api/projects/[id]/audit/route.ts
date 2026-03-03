@@ -3,6 +3,7 @@ import { getProject } from '@/lib/config';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { join } from 'path';
+import { existsSync, readFileSync } from 'fs';
 import { auditCache } from '../package-health/route';
 import { detectPackageManager } from '@/lib/patch-scanner';
 
@@ -14,6 +15,7 @@ interface Vulnerability {
   title: string;
   path: string;
   fixAvailable: boolean;
+  isDirect: boolean;
 }
 
 export async function POST(
@@ -33,6 +35,20 @@ export async function POST(
 
     const cwd = project.path;
     const vulnerabilities: Vulnerability[] = [];
+
+    // Read direct dependencies to distinguish direct vs transitive vulns
+    let directDeps: Set<string> = new Set();
+    try {
+      const pkgJsonPath = join(cwd, 'package.json');
+      if (existsSync(pkgJsonPath)) {
+        const pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf-8'));
+        const deps = Object.keys(pkgJson.dependencies || {});
+        const devDeps = Object.keys(pkgJson.devDependencies || {});
+        directDeps = new Set([...deps, ...devDeps]);
+      }
+    } catch {
+      // If we can't read package.json, assume all are direct (fail open)
+    }
 
     const pm = detectPackageManager(cwd);
 
@@ -85,12 +101,15 @@ To run a security audit, run one of these commands in the project directory:
             findings: Array<{ paths: string[] }>;
             patched_versions: string;
           };
+          const isDirect = directDeps.size === 0 || directDeps.has(adv.module_name);
+          const hasPatch = adv.patched_versions !== '<0.0.0';
           vulnerabilities.push({
             name: adv.module_name,
             severity: adv.severity as Vulnerability['severity'],
             title: adv.title,
             path: adv.findings?.[0]?.paths?.[0] || adv.module_name,
-            fixAvailable: adv.patched_versions !== '<0.0.0',
+            fixAvailable: isDirect ? hasPatch : false,
+            isDirect,
           });
         });
       }
@@ -103,12 +122,14 @@ To run a security audit, run one of these commands in the project directory:
             via: Array<{ title?: string }>;
             fixAvailable: boolean;
           };
+          const isDirect = directDeps.size === 0 || directDeps.has(name);
           vulnerabilities.push({
             name,
             severity: vuln.severity as Vulnerability['severity'],
             title: vuln.via?.[0]?.title || 'Vulnerability',
             path: name,
-            fixAvailable: vuln.fixAvailable,
+            fixAvailable: isDirect ? !!vuln.fixAvailable : false,
+            isDirect,
           });
         });
       }
