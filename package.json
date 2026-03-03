@@ -1,6 +1,6 @@
 {
   "name": "hexops",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "private": true,
   "author": "Hexaxia Technologies",
   "repository": {
@@ -42,7 +42,6 @@
       "node-pty"
     ],
     "overrides": {
-      "minimatch": "10.2.2",
       "ajv": "6.14.0"
     }
   },
