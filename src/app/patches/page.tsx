@@ -782,23 +782,17 @@ export default function PatchesPage() {
                 <span className="text-sm text-red-400">{summary.critical} critical</span>
               </div>
             )}
-            {summary.high > 0 && (
+            {(summary.high + summary.moderate) > 0 && (
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-orange-500" />
-                <span className="text-sm text-orange-400">{summary.high} high</span>
+                <span className="text-sm text-orange-400">{summary.high + summary.moderate} high/moderate</span>
               </div>
             )}
-            {summary.outdatedMajor > 0 && (
+            {(summary.outdatedMajor + summary.outdatedMinor + summary.outdatedPatch) > 0 && (
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-yellow-500" />
-                <span className="text-sm text-yellow-400">{summary.outdatedMajor} major</span>
-              </div>
-            )}
-            {(summary.outdatedMinor + summary.outdatedPatch) > 0 && (
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-zinc-500" />
-                <span className="text-sm text-zinc-400">
-                  {summary.outdatedMinor + summary.outdatedPatch} minor/patch
+                <span className="text-sm text-yellow-400">
+                  {summary.outdatedMajor + summary.outdatedMinor + summary.outdatedPatch} outdated
                 </span>
               </div>
             )}
