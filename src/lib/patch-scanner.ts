@@ -208,19 +208,27 @@ export async function scanVulnerabilities(
         const depPath = adv.findings?.[0]?.paths?.[0] || adv.module_name;
         const pathParts = depPath.split('>').map(s => s.trim());
         const currentVersion = adv.findings?.[0]?.version;
+        // A path like ".>next" means next is a direct dep of the root project (.)
+        // Only treat as transitive if the chain has >1 real package (not just ".")
+        const realParts = pathParts.filter(p => p !== '.');
+        const isTransitive = realParts.length > 1;
         // Extract fix version from patched_versions (e.g., ">=16.1.5" -> "16.1.5")
         const fixVersion = adv.patched_versions?.match(/[\d.]+/)?.[0];
+        const hasPatch = adv.patched_versions !== '<0.0.0';
+
         result.push({
           name: adv.module_name,
           severity: adv.severity as VulnSeverity,
           title: adv.title,
           path: depPath,
-          fixAvailable: adv.patched_versions !== '<0.0.0',
-          fixVersion,
+          // Transitive deps are always actionable via override
+          fixAvailable: isTransitive ? true : hasPatch,
+          fixVersion: isTransitive ? (fixVersion || 'resolve-latest') : fixVersion,
           currentVersion,
-          isDirect: pathParts.length === 1,
-          via: pathParts.length > 1 ? pathParts : undefined,
-          parentPackage: pathParts.length > 1 ? pathParts[0] : undefined,
+          isDirect: !isTransitive,
+          via: isTransitive ? pathParts : undefined,
+          parentPackage: isTransitive ? pathParts[0] : undefined,
+          fixViaOverride: isTransitive || undefined,
           cves: adv.cves?.length ? adv.cves : undefined,
           url: adv.url,
           advisoryId: adv.id,
@@ -233,7 +241,7 @@ export async function scanVulnerabilities(
       for (const [name, info] of Object.entries(data.vulnerabilities)) {
         const vuln = info as {
           severity: string;
-          via: Array<string | { title?: string; source?: number; url?: string; cwe?: string[] }>;
+          via: Array<string | { title?: string; source?: number; url?: string; cwe?: string[]; range?: string }>;
           fixAvailable: boolean | { name: string; version: string; isSemVerMajor?: boolean };
           isDirect: boolean;
           effects?: string[];
@@ -270,31 +278,77 @@ export async function scanVulnerabilities(
           parentPackage = viaChain[0]; // First string in via is typically the parent
         }
 
-        // Determine if fix is actually available and not destructive
-        // - isSemVerMajor means the fix requires a breaking change
-        // - If not a direct dependency and parent has the vuln, it's unfixable by user
+        // Determine fix availability and version
         let fixAvailable = !!vuln.fixAvailable;
         let fixVersion: string | undefined;
         let isBreakingFix = false;
+        let fixViaOverride = false;
+        let fixByParent: { name: string; version: string } | undefined;
 
         if (typeof vuln.fixAvailable === 'object') {
-          fixVersion = vuln.fixAvailable.version;
           isBreakingFix = vuln.fixAvailable.isSemVerMajor === true;
-          // If the fix requires a breaking change, mark as unfixable (requires careful review)
-          if (isBreakingFix) {
-            fixAvailable = false;
+
+          if (vuln.isDirect || vuln.fixAvailable.name === name) {
+            // Direct dep or self-referencing fix — update this package directly
+            fixVersion = vuln.fixAvailable.version;
+          } else if (!vuln.isDirect) {
+            // Transitive dep — fixAvailable points to the parent package to update.
+            // Preferred strategy: update the parent dependency directly.
+            fixByParent = { name: vuln.fixAvailable.name, version: vuln.fixAvailable.version };
           }
         }
 
-        // When fixAvailable is boolean true but no version info, fall back to 'latest'
-        if (!fixVersion && fixAvailable) {
-          fixVersion = 'latest';
+        // Direct deps: always allow patching — breaking updates show a warning but are still actionable
+        if (vuln.isDirect) {
+          if (!fixVersion && fixAvailable) {
+            fixVersion = 'latest';
+          }
         }
 
-        // Transitive deps where user can't directly fix are "unfixable"
+        // Transitive deps: determine fix strategy
         if (!vuln.isDirect && parentPackage) {
-          // User can't directly fix transitive deps - parent package needs to update
-          fixAvailable = false;
+          if (fixByParent && !isBreakingFix) {
+            // Best path: update the parent dependency (non-breaking)
+            fixAvailable = true;
+            fixVersion = fixByParent.version;
+          } else {
+            // Fallback: apply a package manager override for this package directly
+            // Extract fix version from advisory range in via objects
+            let overrideVersion: string | undefined;
+            const viaAdvisories = vuln.via?.filter(v => typeof v === 'object' && v.range) as
+              Array<{ range: string }> | undefined;
+
+            if (viaAdvisories?.length) {
+              const fixVersions: string[] = [];
+              for (const adv of viaAdvisories) {
+                const upperBounds = adv.range.match(/<(\d+\.\d+\.\d+)/g);
+                if (upperBounds) {
+                  for (const bound of upperBounds) {
+                    fixVersions.push(bound.slice(1));
+                  }
+                }
+              }
+
+              if (fixVersions.length > 0 && currentVersion) {
+                const currentMajor = parseInt(currentVersion.split('.')[0], 10);
+                const sameMajorFix = fixVersions.find(v => parseInt(v.split('.')[0], 10) === currentMajor);
+                overrideVersion = sameMajorFix || fixVersions[fixVersions.length - 1];
+              } else if (fixVersions.length > 0) {
+                overrideVersion = fixVersions[fixVersions.length - 1];
+              }
+            }
+
+            fixAvailable = true;
+            fixVersion = overrideVersion || 'resolve-latest';
+            fixViaOverride = true;
+
+            // If the parent update exists but is breaking, keep the reference for display
+            if (fixByParent && isBreakingFix) {
+              // fixByParent preserved so UI can show the alternative
+            } else {
+              fixByParent = undefined;
+            }
+          }
         }
 
         result.push({
@@ -308,7 +362,10 @@ export async function scanVulnerabilities(
           isDirect: vuln.isDirect ?? true,
           via: viaChain?.length > 0 ? viaChain : undefined,
           parentPackage,
-          parentAtLatest: isBreakingFix, // If breaking fix needed, parent is likely at latest
+          parentAtLatest: isBreakingFix,
+          fixViaOverride: fixViaOverride || undefined,
+          fixByParent,
+          isBreakingFix: isBreakingFix || undefined,
           advisoryId,
           url,
         });
@@ -411,6 +468,9 @@ export function buildPriorityQueue(
       }
     }
 
+    // Build a lookup from outdated packages for merging latest version info
+    const outdatedByName = new Map(cache.outdated.map(pkg => [pkg.name, pkg]));
+
     // Process deduplicated vulnerabilities
     for (const [packageName, data] of vulnsByPackage) {
       const { vulns, highestSeverity } = data;
@@ -426,18 +486,34 @@ export function buildPriorityQueue(
         ? firstVuln.title
         : `${vulns.length} vulnerabilities: ${vulns.map(v => v.title).join('; ')}`;
 
+      // Use the latest available version from outdated data when it's newer than
+      // the minimum vulnerability fix version, so the dashboard shows the best
+      // upgrade target (e.g., 16.2.0) instead of just the minimum patch (16.1.7)
+      const outdatedInfo = outdatedByName.get(packageName);
+      const fixVersion = firstVuln.fixVersion || '';
+      const latestVersion = outdatedInfo?.latest || '';
+      const targetVersion = latestVersion && latestVersion !== fixVersion
+        ? latestVersion
+        : fixVersion;
+      const updateType = firstVuln.currentVersion
+        ? getUpdateType(firstVuln.currentVersion, targetVersion)
+        : 'patch';
+
       queue.push({
         priority: getPriorityScore('vulnerability', highestSeverity),
         type: 'vulnerability',
         severity: highestSeverity as VulnSeverity,
         package: packageName,
         currentVersion: firstVuln.currentVersion || '',
-        targetVersion: firstVuln.fixVersion || '',
-        updateType: 'patch',
+        targetVersion,
+        updateType,
         projectId: cache.projectId,
         projectName,
         title,
         fixAvailable: vulns.some(v => v.fixAvailable),
+        fixViaOverride: vulns.some(v => v.fixViaOverride) || undefined,
+        fixByParent: firstVuln.fixByParent,
+        isBreakingFix: vulns.some(v => v.isBreakingFix) || undefined,
         isHeld,
         // Transitive dependency info (from first vuln)
         isDirect: firstVuln.isDirect,
