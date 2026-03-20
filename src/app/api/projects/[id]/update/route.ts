@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getProject } from '@/lib/config';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import {
   addPatchHistoryEntry,
@@ -59,6 +59,8 @@ interface UpdateRequestBody {
     name: string;
     fromVersion?: string;
     toVersion: string;
+    fixViaOverride?: boolean;
+    fixByParent?: { name: string; version: string };
   }>;
 }
 
@@ -125,7 +127,7 @@ export async function POST(
 
     if (packages.length > 0) {
       // Validate all packages first
-      const validPackages: Array<{ name: string; fromVersion?: string; targetVersion: string }> = [];
+      const validPackages: Array<{ name: string; fromVersion?: string; targetVersion: string; fixViaOverride?: boolean; fixByParent?: { name: string; version: string } }> = [];
       for (const pkg of packages) {
         if (!/^[@a-z0-9][\w\-./@]*$/i.test(pkg.name)) {
           results.push({ package: pkg.name, success: false, output: '', error: 'Invalid package name' });
@@ -136,7 +138,7 @@ export async function POST(
           results.push({ package: pkg.name, success: false, output: '', error: 'Invalid version specifier' });
           continue;
         }
-        validPackages.push({ name: pkg.name, fromVersion: pkg.fromVersion, targetVersion });
+        validPackages.push({ name: pkg.name, fromVersion: pkg.fromVersion, targetVersion, fixViaOverride: pkg.fixViaOverride, fixByParent: pkg.fixByParent });
       }
 
       // Filter out transitive dependencies — only allow updates to packages
@@ -157,12 +159,30 @@ export async function POST(
       }
 
       const transitivePkgs: typeof validPackages = [];
+      const overridePkgs: typeof validPackages = [];
       const directPkgs: typeof validPackages = [];
 
       if (directDeps.size > 0) {
         for (const pkg of validPackages) {
           if (directDeps.has(pkg.name)) {
             directPkgs.push(pkg);
+          } else if (pkg.fixByParent && directDeps.has(pkg.fixByParent.name)) {
+            // Transitive dep fixable by updating its parent direct dependency
+            // Deduplicate: don't add the same parent twice
+            const alreadyQueued = directPkgs.some(p => p.name === pkg.fixByParent!.name);
+            if (!alreadyQueued) {
+              directPkgs.push({
+                name: pkg.fixByParent.name,
+                fromVersion: undefined,
+                targetVersion: pkg.fixByParent.version,
+              });
+            }
+            logger.info('patches', 'fix_via_parent', `Fixing ${pkg.name} by updating parent ${pkg.fixByParent.name}@${pkg.fixByParent.version}`, {
+              projectId: id,
+              meta: { transitiveDep: pkg.name, parent: pkg.fixByParent.name, parentVersion: pkg.fixByParent.version },
+            });
+          } else if (pkg.fixViaOverride) {
+            overridePkgs.push(pkg);
           } else {
             transitivePkgs.push(pkg);
             results.push({
@@ -180,6 +200,121 @@ export async function POST(
       } else {
         // Couldn't determine direct deps — allow all (fail open)
         directPkgs.push(...validPackages);
+      }
+
+      // Apply package manager overrides for transitive dependencies with known fixes
+      if (overridePkgs.length > 0) {
+        // Resolve "resolve-latest" versions by querying the registry
+        for (const pkg of overridePkgs) {
+          if (pkg.targetVersion === 'resolve-latest') {
+            try {
+              const viewCmd = packageManager === 'pnpm'
+                ? `pnpm view ${pkg.name} version`
+                : packageManager === 'yarn'
+                ? `yarn info ${pkg.name} version`
+                : `npm view ${pkg.name} version`;
+              const { stdout } = await execAsync(viewCmd, { cwd, timeout: 15000 });
+              const resolved = stdout.trim();
+              if (resolved && /^\d+\.\d+\.\d+/.test(resolved)) {
+                pkg.targetVersion = resolved;
+              } else {
+                pkg.targetVersion = 'latest';
+              }
+            } catch {
+              // Fallback: use 'latest' — package managers can usually resolve this
+              pkg.targetVersion = 'latest';
+            }
+          }
+        }
+
+        try {
+          const pkgJsonPath = join(cwd, 'package.json');
+          const pkgJsonRaw = readFileSync(pkgJsonPath, 'utf-8');
+          const pkgJson = JSON.parse(pkgJsonRaw);
+
+          // Write overrides using the correct key for each package manager
+          if (packageManager === 'pnpm') {
+            if (!pkgJson.pnpm) pkgJson.pnpm = {};
+            if (!pkgJson.pnpm.overrides) pkgJson.pnpm.overrides = {};
+            for (const pkg of overridePkgs) {
+              pkgJson.pnpm.overrides[pkg.name] = pkg.targetVersion;
+            }
+          } else if (packageManager === 'npm') {
+            if (!pkgJson.overrides) pkgJson.overrides = {};
+            for (const pkg of overridePkgs) {
+              pkgJson.overrides[pkg.name] = pkg.targetVersion;
+            }
+          } else {
+            // yarn uses "resolutions"
+            if (!pkgJson.resolutions) pkgJson.resolutions = {};
+            for (const pkg of overridePkgs) {
+              pkgJson.resolutions[pkg.name] = pkg.targetVersion;
+            }
+          }
+
+          // Write package.json back, preserving indentation
+          const indent = pkgJsonRaw.match(/^(\s+)/m)?.[1] || '  ';
+          writeFileSync(pkgJsonPath, JSON.stringify(pkgJson, null, indent) + '\n', 'utf-8');
+
+          // Run install to apply the overrides
+          const installCmd = packageManager === 'pnpm'
+            ? 'pnpm install --no-frozen-lockfile'
+            : packageManager === 'npm'
+            ? 'npm install --legacy-peer-deps'
+            : 'yarn install';
+
+          let installOutput = '';
+          try {
+            const installResult = await execAsync(installCmd, { cwd, timeout: NPM_INSTALL_TIMEOUT });
+            installOutput = `$ ${installCmd}\n${installResult.stdout || ''}${installResult.stderr || ''}`;
+          } catch (installErr) {
+            const err = installErr as { stdout?: string; stderr?: string; message?: string };
+            installOutput = `$ ${installCmd}\n${err.stdout || ''}${err.stderr || ''}`;
+            // Check if it looks like it worked despite exit code
+            const looksInstalled = (err.stdout || '').includes('added') || (err.stdout || '').includes('done');
+            if (!looksInstalled) {
+              throw new Error(err.stderr || err.message || 'Install after override failed');
+            }
+          }
+
+          for (const pkg of overridePkgs) {
+            results.push({
+              package: pkg.name,
+              success: true,
+              output: `Applied override: ${pkg.name}@${pkg.targetVersion}\n${installOutput}`,
+            });
+            logger.info('patches', 'override_applied', `Applied override for ${pkg.name}@${pkg.targetVersion}`, {
+              projectId: id,
+              meta: { package: pkg.name, fromVersion: pkg.fromVersion || 'unknown', toVersion: pkg.targetVersion, packageManager, mechanism: 'override' },
+            });
+            addPatchHistoryEntry({
+              id: generatePatchId(),
+              timestamp: new Date().toISOString(),
+              projectId: id,
+              package: pkg.name,
+              fromVersion: pkg.fromVersion || 'unknown',
+              toVersion: pkg.targetVersion,
+              updateType: pkg.fromVersion ? getUpdateType(pkg.fromVersion, pkg.targetVersion) : 'patch',
+              trigger: 'manual',
+              success: true,
+              output: `Override applied: ${pkg.name}@${pkg.targetVersion}`,
+            });
+          }
+        } catch (err) {
+          const overrideErr = err as { message?: string };
+          for (const pkg of overridePkgs) {
+            results.push({
+              package: pkg.name,
+              success: false,
+              output: '',
+              error: `Failed to apply override: ${overrideErr.message}`,
+            });
+            logger.error('patches', 'override_failed', `Failed to apply override for ${pkg.name}: ${overrideErr.message}`, {
+              projectId: id,
+              meta: { package: pkg.name },
+            });
+          }
+        }
       }
 
       if (directPkgs.length > 0) {
@@ -248,15 +383,45 @@ export async function POST(
 
         const batchOutput = `$ ${batchCmd}\n${batchStdout}${batchStderr ? batchStderr : ''}`;
 
-        if (batchSuccess) {
-          // Batch succeeded — record success for all packages
-          for (const pkg of directPkgs) {
-            results.push({ package: pkg.name, success: true, output: batchOutput });
+        // Even when pnpm exits 0, check for known error patterns in output
+        // (pnpm can exit 0 with ERR_PNPM_LOCKFILE_MISSING_DEPENDENCY, leaving
+        // the package specifier updated in package.json but not actually installed)
+        if (batchSuccess && batchStdout.includes('ERR_PNPM_')) {
+          batchSuccess = false;
+          logger.warn('patches', 'pnpm_soft_failure', `pnpm exited 0 but output contains error: ${batchStdout.match(/ERR_PNPM_\w+/)?.[0]}`, {
+            projectId: id,
+            meta: { packages: pkgSpecs.join(', ') },
+          });
+        }
 
-            logger.info('patches', 'package_updated', `Updated ${pkg.name} to ${pkg.targetVersion}`, {
-              projectId: id,
-              meta: { package: pkg.name, fromVersion: pkg.fromVersion || 'unknown', toVersion: pkg.targetVersion, packageManager },
-            });
+        if (batchSuccess) {
+          // Batch succeeded — verify actual install by checking installed versions
+          for (const pkg of directPkgs) {
+            let verified = true;
+            try {
+              const pkgJsonPath = join(cwd, 'node_modules', pkg.name, 'package.json');
+              if (existsSync(pkgJsonPath)) {
+                const installed = JSON.parse(readFileSync(pkgJsonPath, 'utf-8'));
+                if (installed.version === pkg.fromVersion) {
+                  // Version didn't change — install silently failed
+                  verified = false;
+                  logger.warn('patches', 'version_unchanged', `${pkg.name} still at ${installed.version} after install`, {
+                    projectId: id,
+                    meta: { package: pkg.name, expected: pkg.targetVersion, actual: installed.version },
+                  });
+                }
+              }
+            } catch { /* ignore — can't verify, assume success */ }
+
+            const success = verified;
+            results.push({ package: pkg.name, success, output: batchOutput, error: success ? undefined : `Install reported success but ${pkg.name} version did not change` });
+
+            if (success) {
+              logger.info('patches', 'package_updated', `Updated ${pkg.name} to ${pkg.targetVersion}`, {
+                projectId: id,
+                meta: { package: pkg.name, fromVersion: pkg.fromVersion || 'unknown', toVersion: pkg.targetVersion, packageManager },
+              });
+            }
 
             addPatchHistoryEntry({
               id: generatePatchId(),
@@ -267,8 +432,9 @@ export async function POST(
               toVersion: pkg.targetVersion,
               updateType: pkg.fromVersion ? getUpdateType(pkg.fromVersion, pkg.targetVersion) : 'patch',
               trigger: 'manual',
-              success: true,
+              success,
               output: batchOutput,
+              error: success ? undefined : `Version unchanged after install`,
             });
           }
         } else {
