@@ -54,6 +54,43 @@ async function cleanNodeModules(cwd: string): Promise<boolean> {
   }
 }
 
+/**
+ * Check pnpm lockfile health by running a dry-run install.
+ * Returns healthy:false when the lockfile has missing or broken entries
+ * (e.g., cross-platform optional deps like @next/swc-darwin-arm64).
+ */
+async function checkPnpmLockfileHealth(cwd: string): Promise<{ healthy: boolean; reason?: string }> {
+  try {
+    const { stdout, stderr } = await execAsync('pnpm install --frozen-lockfile 2>&1 || true', {
+      cwd,
+      timeout: 60000,
+    });
+    const output = `${stdout}\n${stderr}`;
+    if (output.includes('ERR_PNPM_LOCKFILE_MISSING_DEPENDENCY') || output.includes('ERR_PNPM_OUTDATED_LOCKFILE')) {
+      const errorMatch = output.match(/ERR_PNPM_\w+/);
+      return { healthy: false, reason: errorMatch?.[0] || 'Broken pnpm lockfile' };
+    }
+    return { healthy: true };
+  } catch {
+    return { healthy: false, reason: 'Unable to verify pnpm lockfile' };
+  }
+}
+
+/**
+ * Regenerate pnpm lockfile by deleting and reinstalling.
+ * This fixes cross-platform issues (e.g., darwin-arm64 entries on Linux)
+ * and corrupted merge conflict artifacts.
+ */
+async function repairPnpmLockfile(cwd: string): Promise<boolean> {
+  try {
+    await execAsync('rm -f pnpm-lock.yaml', { cwd, timeout: 5000 });
+    await execAsync('pnpm install --no-frozen-lockfile', { cwd, timeout: 180000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 interface UpdateRequestBody {
   packages?: Array<{
     name: string;
@@ -114,7 +151,7 @@ export async function POST(
       error?: string;
     }> = [];
 
-    // Pre-flight: check node_modules health for npm projects before batch updates
+    // Pre-flight: check dependency tree health before batch updates
     if (packageManager === 'npm' && packages.length > 1) {
       const health = await checkNodeModulesHealth(cwd);
       if (!health.healthy) {
@@ -122,6 +159,19 @@ export async function POST(
           projectId: id,
         });
         await cleanNodeModules(cwd);
+      }
+    } else if (packageManager === 'pnpm') {
+      const health = await checkPnpmLockfileHealth(cwd);
+      if (!health.healthy) {
+        logger.warn('patches', 'preflight_lockfile_broken', `${health.reason} in ${id}, regenerating lockfile`, {
+          projectId: id,
+        });
+        const repaired = await repairPnpmLockfile(cwd);
+        if (repaired) {
+          logger.info('patches', 'lockfile_repaired', `pnpm lockfile regenerated for ${id}`, { projectId: id });
+        } else {
+          logger.error('patches', 'lockfile_repair_failed', `Failed to regenerate pnpm lockfile for ${id}`, { projectId: id });
+        }
       }
     }
 
@@ -387,11 +437,40 @@ export async function POST(
         // (pnpm can exit 0 with ERR_PNPM_LOCKFILE_MISSING_DEPENDENCY, leaving
         // the package specifier updated in package.json but not actually installed)
         if (batchSuccess && batchStdout.includes('ERR_PNPM_')) {
-          batchSuccess = false;
-          logger.warn('patches', 'pnpm_soft_failure', `pnpm exited 0 but output contains error: ${batchStdout.match(/ERR_PNPM_\w+/)?.[0]}`, {
+          const pnpmError = batchStdout.match(/ERR_PNPM_\w+/)?.[0] || 'ERR_PNPM_UNKNOWN';
+          logger.warn('patches', 'pnpm_soft_failure', `pnpm exited 0 but output contains error: ${pnpmError}`, {
             projectId: id,
             meta: { packages: pkgSpecs.join(', ') },
           });
+
+          // Attempt lockfile repair and retry the batch
+          if (packageManager === 'pnpm' && pnpmError.includes('LOCKFILE')) {
+            logger.info('patches', 'lockfile_repair_retry', `Repairing lockfile and retrying batch for ${id}`, { projectId: id });
+            const repaired = await repairPnpmLockfile(cwd);
+            if (repaired) {
+              try {
+                const retryResult = await execAsync(batchCmd, { cwd, timeout: NPM_INSTALL_TIMEOUT });
+                batchStdout = retryResult.stdout || '';
+                batchStderr = retryResult.stderr || '';
+                // Re-check for errors after retry
+                if (!batchStdout.includes('ERR_PNPM_')) {
+                  batchSuccess = true;
+                  logger.info('patches', 'retry_succeeded', `Batch install succeeded after lockfile repair for ${id}`, { projectId: id });
+                } else {
+                  batchSuccess = false;
+                }
+              } catch (retryErr) {
+                const err = retryErr as { stdout?: string; stderr?: string };
+                batchStdout = err.stdout || '';
+                batchStderr = err.stderr || '';
+                batchSuccess = false;
+              }
+            } else {
+              batchSuccess = false;
+            }
+          } else {
+            batchSuccess = false;
+          }
         }
 
         if (batchSuccess) {
