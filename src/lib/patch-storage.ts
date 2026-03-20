@@ -117,6 +117,48 @@ export function generatePatchId(): string {
 }
 
 /**
+ * Reconcile patch history for a project against actual installed versions.
+ * Marks recent "success" entries as failed if the package version didn't
+ * actually change (e.g., due to pnpm soft failures before detection was added).
+ *
+ * @param projectId - The project to reconcile
+ * @param installedVersions - Map of package name -> currently installed version
+ */
+export function reconcilePatchHistory(
+  projectId: string,
+  installedVersions: Record<string, string>
+): number {
+  const history = readPatchHistory();
+  let corrected = 0;
+
+  for (const entry of history.updates) {
+    if (entry.projectId !== projectId) continue;
+    if (!entry.success) continue;
+
+    const installed = installedVersions[entry.package];
+    if (!installed) continue;
+
+    // If the installed version still matches fromVersion (not toVersion),
+    // this "successful" patch didn't actually take effect
+    if (installed === entry.fromVersion && installed !== entry.toVersion) {
+      entry.success = false;
+      entry.error = `Retroactively marked failed: ${entry.package} still at ${installed} (expected ${entry.toVersion})`;
+      corrected++;
+    }
+  }
+
+  if (corrected > 0) {
+    try {
+      writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
+    } catch {
+      // Ignore write errors
+    }
+  }
+
+  return corrected;
+}
+
+/**
  * Get cache file path for a project
  */
 function getCacheFilePath(projectId: string): string {

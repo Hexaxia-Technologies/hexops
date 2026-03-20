@@ -17,6 +17,7 @@ import {
   writeProjectCache,
   createProjectCache,
   updateProjectPatchState,
+  reconcilePatchHistory,
 } from './patch-storage';
 
 const execAsync = promisify(exec);
@@ -411,6 +412,22 @@ export async function scanProject(
     ).length,
     lastChecked: cache.timestamp,
   });
+
+  // Reconcile patch history: check recent "success" entries against actual
+  // installed versions to catch false positives from prior soft failures
+  const installedVersions: Record<string, string> = {};
+  for (const vuln of vulnerabilities) {
+    if (vuln.currentVersion) installedVersions[vuln.name] = vuln.currentVersion;
+  }
+  for (const pkg of outdated) {
+    if (pkg.current) installedVersions[pkg.name] = pkg.current;
+  }
+  if (Object.keys(installedVersions).length > 0) {
+    const corrected = reconcilePatchHistory(project.id, installedVersions);
+    if (corrected > 0) {
+      console.log(`Reconciled ${corrected} false-success patch history entries for ${project.id}`);
+    }
+  }
 
   return cache;
 }
