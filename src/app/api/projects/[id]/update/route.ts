@@ -660,10 +660,24 @@ export async function POST(
       }
     }
 
-    // Invalidate caches for this project
+    // Invalidate caches and force a fresh rescan so the dashboard immediately
+    // reflects the updated state (instead of serving stale pnpm outdated output)
     invalidateProjectCache(id);
     invalidatePackageStatusCache(cwd);
     clearInMemoryCache(id);
+
+    if (anySucceeded) {
+      try {
+        const { scanProject } = await import('@/lib/patch-scanner');
+        const { getProject: getProjectConfig } = await import('@/lib/config');
+        const projectConfig = getProjectConfig(id);
+        if (projectConfig) {
+          await scanProject(projectConfig, true); // forceRefresh=true
+        }
+      } catch {
+        // Non-fatal: cache will be rebuilt on next GET
+      }
+    }
 
     const allSucceeded = results.every(r => r.success);
     const output = results.map(r => r.output).join('\n\n');
