@@ -113,7 +113,10 @@ export default function PatchesPage() {
     try {
       // Add cache-busting param after updates to ensure fresh data
       const url = bustCache ? `/api/patches?t=${Date.now()}` : '/api/patches';
-      const res = await fetch(url, { cache: 'no-store' });
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout
+      const res = await fetch(url, { cache: 'no-store', signal: controller.signal });
+      clearTimeout(timeout);
       if (!res.ok) throw new Error('Failed to fetch');
       const json = await res.json();
       setData(json);
@@ -122,7 +125,8 @@ export default function PatchesPage() {
       setExpandedProjects(projectIds);
     } catch (error) {
       console.error('Failed to fetch patches:', error);
-      toast.error('Failed to load patch data');
+      const isAbort = error instanceof DOMException && error.name === 'AbortError';
+      toast.error(isAbort ? 'Patch scan timed out — projects are being scanned, try again in a moment' : 'Failed to load patch data');
     } finally {
       setLoading(false);
     }
