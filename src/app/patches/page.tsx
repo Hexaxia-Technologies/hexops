@@ -166,16 +166,13 @@ export default function PatchesPage() {
     };
 
     es.onerror = () => {
-      // Only treat as error if we haven't received complete data yet
-      if (!data) {
-        toast.error('Connection lost while scanning patches');
-      }
+      // EventSource fires error on normal close; only show toast if no data loaded yet
       setScanProgress(null);
       setLoading(false);
       es.close();
       eventSourceRef.current = null;
     };
-  }, [data]);
+  }, []);
 
   // Fetch persisted patch history
   const fetchHistory = useCallback(async () => {
