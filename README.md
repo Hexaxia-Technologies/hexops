@@ -3,7 +3,7 @@
 A developer operations dashboard for managing multiple local development projects from a single interface. Start and stop dev servers, monitor system health, manage package updates, view logs, and deploy to Vercel.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Version](https://img.shields.io/badge/version-0.9.0-green.svg)
+![Version](https://img.shields.io/badge/version-0.10.2-green.svg)
 
 ## Why HexOps?
 

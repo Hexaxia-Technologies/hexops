@@ -151,6 +151,16 @@ ws://localhost:3000/api/shell/ws?cwd=/path
 
 Messages are binary (terminal I/O).
 
+### Server-Sent Events (SSE)
+
+Patches page uses SSE for progressive loading:
+
+```
+GET /api/patches/stream
+```
+
+Streams `progress` events as each project is scanned, then a final `complete` event with the full payload. Fast path returns a single `complete` event when all caches are warm.
+
 ## Caching Strategy
 
 ### Patch Scanner Cache

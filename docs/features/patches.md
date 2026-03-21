@@ -150,17 +150,36 @@ Toggle to show vulnerabilities that cannot be directly fixed (transitive depende
 
 ### Automatic Scan
 
-Projects are scanned automatically with results cached for 1 hour.
+Projects are scanned automatically with results cached for 1 hour (with random jitter to prevent thundering herd).
+
+### Progressive Loading
+
+When caches are cold, the patches page shows a real-time progress bar as each project is scanned via Server-Sent Events (SSE). Projects with warm caches load instantly.
 
 ### Manual Rescan
 
-Click "Rescan" to force a fresh scan of all projects.
+Click "Scan All" to force a fresh scan of all projects with live progress.
 
-## Unfixable Vulnerabilities
+## Transitive Vulnerabilities
 
-Some vulnerabilities are in transitive dependencies and cannot be updated directly.
+Vulnerabilities in transitive dependencies are handled automatically:
 
-These show:
-- "Unfixable" badge
-- Dependency chain (via field)
-- Which direct dependency needs to update
+- **Fix via parent**: If the parent direct dependency has a non-breaking update that resolves the vulnerability, HexOps updates the parent
+- **Fix via override**: If no parent update exists, HexOps applies a package manager override (`pnpm.overrides`, `npm.overrides`, or `yarn.resolutions`)
+- Dependency chain shown in the details panel (via field)
+
+## Pnpm Lockfile Handling
+
+HexOps automatically detects and repairs broken pnpm lockfiles before patching:
+
+- Cross-platform entries (e.g., `@next/swc-darwin-arm64` on Linux)
+- Corrupted merge conflict artifacts
+- Lockfile regenerated via `pnpm install --no-frozen-lockfile`
+
+## Post-Patch Verification
+
+After applying patches, HexOps verifies each package was actually installed:
+
+- Checks installed version in `node_modules` matches the target
+- Detects pnpm soft failures (exit 0 with `ERR_PNPM_*`)
+- Retroactively corrects false-success history entries on rescan

@@ -183,13 +183,35 @@ GET /api/patches
 }
 ```
 
+### Stream Patches (SSE)
+
+```
+GET /api/patches/stream
+```
+
+Server-Sent Events endpoint for progressive patch loading. Streams progress events as each project is scanned, then emits the complete data payload.
+
+**Query Parameters:**
+- `force` - Set to `1` to force rescan all projects (ignores cache)
+- `t` - Cache-busting timestamp
+
+**Events:**
+```
+data: {"type":"progress","projectId":"hexops","projectName":"HexOps","scanned":1,"total":24}
+data: {"type":"progress","projectId":"sailbot","projectName":"SailBot","scanned":2,"total":24}
+...
+data: {"type":"complete","queue":[...],"summary":{...},"lastScan":"...","projectCount":24,...}
+```
+
+**Fast path:** When all project caches are valid and `force` is not set, emits a single `complete` event immediately (no progress events).
+
 ### Scan Projects
 
 ```
 POST /api/patches/scan
 ```
 
-Forces a rescan of all projects.
+Forces a rescan of all projects (non-streaming alternative).
 
 ### Get Patch History
 
@@ -226,6 +248,26 @@ POST /api/projects/[id]/holds
 ```json
 {
   "package": "package-name"
+}
+```
+
+### Get Package Health
+
+```
+GET /api/projects/[id]/package-health
+```
+
+Returns combined dependency status: all installed packages with versions, outdated flags, and vulnerability data.
+
+**Response:**
+```json
+{
+  "dependencies": [
+    { "name": "next", "current": "16.2.1", "isOutdated": false }
+  ],
+  "devDependencies": [...],
+  "vulnerabilities": [...],
+  "lastAuditDate": "2026-03-21T07:00:00Z"
 }
 ```
 

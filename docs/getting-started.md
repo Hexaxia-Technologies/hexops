@@ -15,7 +15,7 @@ Before installing HexOps, ensure you have:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/hexops.git
+git clone https://github.com/Hexaxia-Technologies/hexops.git
 cd hexops
 ```
 
