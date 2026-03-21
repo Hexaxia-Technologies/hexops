@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -108,29 +108,74 @@ export default function PatchesPage() {
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   // Per-project git state for commit/push flow
   const [projectGitStates, setProjectGitStates] = useState<Record<string, ProjectGitState>>({});
+  const [scanProgress, setScanProgress] = useState<{ scanned: number; total: number; currentProject: string } | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
-  const fetchPatches = useCallback(async (bustCache = false) => {
-    try {
-      // Add cache-busting param after updates to ensure fresh data
-      const url = bustCache ? `/api/patches?t=${Date.now()}` : '/api/patches';
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout
-      const res = await fetch(url, { cache: 'no-store', signal: controller.signal });
-      clearTimeout(timeout);
-      if (!res.ok) throw new Error('Failed to fetch');
-      const json = await res.json();
-      setData(json);
-      // Expand all projects by default
-      const projectIds = new Set<string>(json.queue.map((item: PatchQueueItem) => item.projectId));
-      setExpandedProjects(projectIds);
-    } catch (error) {
-      console.error('Failed to fetch patches:', error);
-      const isAbort = error instanceof DOMException && error.name === 'AbortError';
-      toast.error(isAbort ? 'Patch scan timed out — projects are being scanned, try again in a moment' : 'Failed to load patch data');
-    } finally {
-      setLoading(false);
+  const fetchPatches = useCallback((bustCache = false) => {
+    // Close any existing connection
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
-  }, []);
+
+    const params = new URLSearchParams();
+    if (bustCache) {
+      params.set('force', '1');
+      params.set('t', Date.now().toString());
+    }
+    const url = `/api/patches/stream${params.toString() ? `?${params}` : ''}`;
+    const es = new EventSource(url);
+    eventSourceRef.current = es;
+
+    es.onmessage = (event) => {
+      try {
+        const parsed = JSON.parse(event.data);
+
+        if (parsed.type === 'progress') {
+          setScanProgress({
+            scanned: parsed.scanned,
+            total: parsed.total,
+            currentProject: parsed.projectName,
+          });
+        }
+
+        if (parsed.type === 'complete') {
+          setData(parsed);
+          const projectIds = new Set<string>(
+            parsed.queue.map((item: PatchQueueItem) => item.projectId)
+          );
+          setExpandedProjects(projectIds);
+          setScanProgress(null);
+          setLoading(false);
+          setScanning(false);
+          es.close();
+          eventSourceRef.current = null;
+        }
+
+        if (parsed.type === 'error') {
+          toast.error(parsed.message || 'Failed to load patch data');
+          setScanProgress(null);
+          setLoading(false);
+          setScanning(false);
+          es.close();
+          eventSourceRef.current = null;
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    };
+
+    es.onerror = () => {
+      // Only treat as error if we haven't received complete data yet
+      if (!data) {
+        toast.error('Connection lost while scanning patches');
+      }
+      setScanProgress(null);
+      setLoading(false);
+      es.close();
+      eventSourceRef.current = null;
+    };
+  }, [data]);
 
   // Fetch persisted patch history
   const fetchHistory = useCallback(async () => {
@@ -167,6 +212,12 @@ export default function PatchesPage() {
   useEffect(() => {
     fetchPatches();
     fetchHistory();
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+    };
   }, [fetchPatches, fetchHistory]);
 
   // Load preferences from localStorage on mount
@@ -379,20 +430,10 @@ export default function PatchesPage() {
     }
   }, [fetchProjectGitStatus]);
 
-  const handleScan = async () => {
+  const handleScan = () => {
     setScanning(true);
-    try {
-      const res = await fetch('/api/patches/scan', { method: 'POST' });
-      if (!res.ok) throw new Error('Scan failed');
-      const json = await res.json();
-      setData(json);
-      toast.success('Scan complete');
-    } catch (error) {
-      console.error('Scan failed:', error);
-      toast.error('Scan failed');
-    } finally {
-      setScanning(false);
-    }
+    setLoading(true);
+    fetchPatches(true);
   };
 
   // Create selection key for an item (1:1 relationship)
@@ -730,7 +771,24 @@ export default function PatchesPage() {
   if (loading) {
     return (
       <main className="flex-1 flex items-center justify-center">
-        <div className="text-zinc-500">Loading patch data...</div>
+        <div className="text-center space-y-3">
+          <div className="text-zinc-400 text-sm">
+            {scanProgress
+              ? `Scanning projects\u2026 ${scanProgress.scanned} / ${scanProgress.total}`
+              : 'Connecting\u2026'}
+          </div>
+          {scanProgress && (
+            <>
+              <div className="w-64 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-purple-500 rounded-full transition-all duration-300 ease-out"
+                  style={{ width: `${(scanProgress.scanned / scanProgress.total) * 100}%` }}
+                />
+              </div>
+              <div className="text-zinc-600 text-xs">{scanProgress.currentProject}</div>
+            </>
+          )}
+        </div>
       </main>
     );
   }
