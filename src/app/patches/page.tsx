@@ -770,12 +770,12 @@ export default function PatchesPage() {
 
   if (loading) {
     return (
-      <main className="flex-1 flex items-center justify-center">
-        <div className="text-center space-y-3">
-          <div className="text-zinc-400 text-sm">
+      <main className="flex-1 flex items-center justify-center" suppressHydrationWarning>
+        <div className="text-center space-y-3" suppressHydrationWarning>
+          <div className="text-zinc-400 text-sm" suppressHydrationWarning>
             {scanProgress
               ? `Scanning projects\u2026 ${scanProgress.scanned} / ${scanProgress.total}`
-              : 'Connecting\u2026'}
+              : 'Loading patch data\u2026'}
           </div>
           {scanProgress && (
             <>
