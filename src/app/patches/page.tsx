@@ -628,8 +628,8 @@ export default function PatchesPage() {
       }
 
       toast.success(hold ? `${packageName} put on hold` : `${packageName} released from hold`);
-      // Refresh data to update hold status
-      fetchPatches(true);
+      // Refresh data to update hold status (no force — config change is immediate)
+      fetchPatches();
     } catch {
       toast.error(`Failed to ${hold ? 'hold' : 'release'} package`);
     }
@@ -758,8 +758,9 @@ export default function PatchesPage() {
       setPendingCommit(projectId, packages);
     }
 
-    // Refresh data with cache busting to get fresh scan results
-    fetchPatches(true);
+    // Refresh data — the update route already rescanned the affected project(s),
+    // so a normal fetch (no force) will pick up the fresh cache without rescanning all 24
+    fetchPatches();
   };
 
   // Get unique project count from queue
