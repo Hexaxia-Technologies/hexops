@@ -95,6 +95,7 @@ export default function PatchesPage() {
   const [data, setData] = useState<PatchesData | null>(null);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
+  const updatingRef = useRef(false);
   const [filter, setFilter] = useState<FilterType>('all');
   const [viewMode, setViewMode] = useState<ViewMode>(DEFAULT_PREFS.viewMode);
   const [selectedPackages, setSelectedPackages] = useState<Set<string>>(new Set());
@@ -207,6 +208,9 @@ export default function PatchesPage() {
   }, []);
 
   useEffect(() => {
+    // Skip refetch if an update is in progress (prevents HMR re-mount
+    // from replacing patch data mid-update with partially-scanned results)
+    if (updatingRef.current) return;
     fetchPatches();
     fetchHistory();
     return () => {
@@ -636,6 +640,7 @@ export default function PatchesPage() {
     if (!data || selectedPackages.size === 0) return;
 
     setUpdating(true);
+    updatingRef.current = true;
     const selectedItems = filteredQueue.filter(
       item => selectedPackages.has(getItemKey(item))
     );
@@ -717,6 +722,7 @@ export default function PatchesPage() {
 
     setUpdateStatus(null);
     setUpdating(false);
+    updatingRef.current = false;
     setSelectedPackages(new Set());
     setRecentUpdates(prev => [...newResults, ...prev].slice(0, 20));
 
