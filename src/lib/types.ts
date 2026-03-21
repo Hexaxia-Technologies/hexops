@@ -127,6 +127,9 @@ export interface PatchQueueItem {
   via?: string[];
   parentPackage?: string;
   parentAtLatest?: boolean;
+  fixViaOverride?: boolean;     // Fix via package manager override (fallback for transitive deps)
+  fixByParent?: { name: string; version: string };  // Fix by updating this direct dep to this version
+  isBreakingFix?: boolean;      // Fix requires a semver-major update
   // CVE/Advisory info (for vulnerabilities)
   cves?: string[];
   url?: string;
@@ -193,6 +196,9 @@ export interface VulnerabilityInfo {
   via?: string[];               // Dependency chain (e.g., ["@vercel/blob", "undici"])
   parentPackage?: string;       // Direct parent package that needs updating
   parentAtLatest?: boolean;     // Is the parent already at latest version?
+  fixViaOverride?: boolean;     // Fix via package manager override (fallback for transitive deps)
+  fixByParent?: { name: string; version: string };  // Fix by updating this direct dep to this version
+  isBreakingFix?: boolean;      // Fix requires a semver-major update
   // CVE/Advisory info
   cves?: string[];              // CVE identifiers (e.g., ["CVE-2024-12345"])
   url?: string;                 // Link to advisory (GitHub/npm)

@@ -15,6 +15,7 @@ interface Vulnerability {
   title: string;
   path: string;
   fixAvailable: boolean;
+  fixViaOverride?: boolean;
   isDirect: boolean;
 }
 
@@ -108,7 +109,9 @@ To run a security audit, run one of these commands in the project directory:
             severity: adv.severity as Vulnerability['severity'],
             title: adv.title,
             path: adv.findings?.[0]?.paths?.[0] || adv.module_name,
-            fixAvailable: isDirect ? hasPatch : false,
+            // All vulns are actionable — transitive deps are fixed via override
+            fixAvailable: isDirect ? hasPatch : true,
+            fixViaOverride: !isDirect || undefined,
             isDirect,
           });
         });
@@ -128,7 +131,9 @@ To run a security audit, run one of these commands in the project directory:
             severity: vuln.severity as Vulnerability['severity'],
             title: vuln.via?.[0]?.title || 'Vulnerability',
             path: name,
-            fixAvailable: isDirect ? !!vuln.fixAvailable : false,
+            // All vulns are actionable — transitive deps are fixed via override
+            fixAvailable: isDirect ? !!vuln.fixAvailable : true,
+            fixViaOverride: !isDirect || undefined,
             isDirect,
           });
         });

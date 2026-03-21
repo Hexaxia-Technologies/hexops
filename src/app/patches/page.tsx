@@ -32,13 +32,11 @@ const PREFS_KEY = 'hexops-patches-preferences';
 
 interface PatchesPreferences {
   viewMode: ViewMode;
-  showUnfixable: boolean;
   showHeld: boolean;
 }
 
 const DEFAULT_PREFS: PatchesPreferences = {
   viewMode: 'grouped',  // Default to grouped view
-  showUnfixable: true,
   showHeld: true,
 };
 
@@ -105,7 +103,7 @@ export default function PatchesPage() {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [recentUpdates, setRecentUpdates] = useState<UpdateResult[]>([]);
-  const [showUnfixable, setShowUnfixable] = useState(DEFAULT_PREFS.showUnfixable);
+  // showUnfixable removed — all vulnerabilities are now actionable
   const [showHeld, setShowHeld] = useState(DEFAULT_PREFS.showHeld);
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   // Per-project git state for commit/push flow
@@ -171,7 +169,6 @@ export default function PatchesPage() {
   useEffect(() => {
     const prefs = loadPreferences();
     setViewMode(prefs.viewMode);
-    setShowUnfixable(prefs.showUnfixable);
     setShowHeld(prefs.showHeld);
     setPrefsLoaded(true);
   }, []);
@@ -179,9 +176,9 @@ export default function PatchesPage() {
   // Save preferences when they change (after initial load)
   useEffect(() => {
     if (prefsLoaded) {
-      savePreferences({ viewMode, showUnfixable, showHeld });
+      savePreferences({ viewMode, showHeld });
     }
-  }, [viewMode, showUnfixable, showHeld, prefsLoaded]);
+  }, [viewMode, showHeld, prefsLoaded]);
 
   // Fetch git status for a project
   const fetchProjectGitStatus = useCallback(async (projectId: string) => {
@@ -416,11 +413,19 @@ export default function PatchesPage() {
   };
 
   // Filter queue by type and category
-  // Count unfixable vulnerabilities
-  const unfixableCount = useMemo(() => {
+  // Count override items (transitive deps fixed via package manager override)
+  const overrideCount = useMemo(() => {
     if (!data) return 0;
     return data.queue.filter(
-      item => item.type === 'vulnerability' && item.fixAvailable === false
+      item => item.fixViaOverride === true
+    ).length;
+  }, [data]);
+
+  // Count breaking updates
+  const breakingCount = useMemo(() => {
+    if (!data) return 0;
+    return data.queue.filter(
+      item => item.isBreakingFix === true
     ).length;
   }, [data]);
 
@@ -438,11 +443,6 @@ export default function PatchesPage() {
       if (filter === 'vulns' && item.type !== 'vulnerability') return false;
       if (filter === 'outdated' && item.type !== 'outdated') return false;
 
-      // Hide unfixable vulnerabilities if toggle is off
-      if (!showUnfixable && item.type === 'vulnerability' && item.fixAvailable === false) {
-        return false;
-      }
-
       // Hide held packages if toggle is off
       if (!showHeld && item.isHeld) {
         return false;
@@ -456,7 +456,7 @@ export default function PatchesPage() {
 
       return true;
     });
-  }, [data, filter, selectedCategory, showUnfixable, showHeld]);
+  }, [data, filter, selectedCategory, showHeld]);
 
   // Group by project for grouped view - show ALL projects
   const groupedByProject = useMemo((): ProjectGroup[] => {
@@ -508,7 +508,7 @@ export default function PatchesPage() {
   const selectAllInProject = (projectId: string) => {
     // Exclude held and unfixable packages from selection
     const projectPatches = filteredQueue.filter(
-      item => item.projectId === projectId && !item.isHeld && !(item.type === 'vulnerability' && item.fixAvailable === false)
+      item => item.projectId === projectId && !item.isHeld
     );
     const keys = projectPatches.map(item => getItemKey(item));
     setSelectedPackages(prev => {
@@ -531,7 +531,7 @@ export default function PatchesPage() {
   const getProjectSelectionState = (projectId: string): 'none' | 'some' | 'all' => {
     // Only count selectable items (not held, not unfixable)
     const selectablePatches = filteredQueue.filter(
-      item => item.projectId === projectId && !item.isHeld && !(item.type === 'vulnerability' && item.fixAvailable === false)
+      item => item.projectId === projectId && !item.isHeld
     );
     if (selectablePatches.length === 0) return 'none';
     const selectedCount = selectablePatches.filter(item => selectedPackages.has(getItemKey(item))).length;
@@ -543,7 +543,7 @@ export default function PatchesPage() {
   const selectAll = () => {
     // Exclude held and unfixable packages from selection
     const selectableItems = filteredQueue.filter(
-      item => !item.isHeld && !(item.type === 'vulnerability' && item.fixAvailable === false)
+      item => !item.isHeld
     );
     const keys = selectableItems.map(item => getItemKey(item));
     setSelectedPackages(new Set(keys));
@@ -599,7 +599,7 @@ export default function PatchesPage() {
     );
 
     // Group by project for batch updates
-    const updatesByProject = new Map<string, { name: string; projectName: string; toVersion: string; fromVersion: string }[]>();
+    const updatesByProject = new Map<string, { name: string; projectName: string; toVersion: string; fromVersion: string; fixViaOverride?: boolean; fixByParent?: { name: string; version: string } }[]>();
 
     for (const item of selectedItems) {
       if (!updatesByProject.has(item.projectId)) {
@@ -610,6 +610,8 @@ export default function PatchesPage() {
         projectName: item.projectName,
         toVersion: item.targetVersion,
         fromVersion: item.currentVersion,
+        fixViaOverride: item.fixViaOverride,
+        fixByParent: item.fixByParent,
       });
     }
 
@@ -860,23 +862,21 @@ export default function PatchesPage() {
               </Button>
             </div>
 
-            {/* Unfixable toggle */}
-            {unfixableCount > 0 && (
+            {/* Override and breaking counts */}
+            {overrideCount > 0 && (
               <>
                 <div className="h-5 w-px bg-zinc-700" />
-                <Button
-                  variant={showUnfixable ? 'secondary' : 'ghost'}
-                  size="sm"
-                  className={cn(
-                    'h-7 text-xs',
-                    showUnfixable ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-400' : ''
-                  )}
-                  onClick={() => setShowUnfixable(!showUnfixable)}
-                  title={showUnfixable ? 'Hide unfixable vulnerabilities' : 'Show unfixable vulnerabilities'}
-                >
-                  <AlertTriangle className="h-3 w-3 mr-1" />
-                  Unfixable ({unfixableCount})
-                </Button>
+                <span className="text-xs text-blue-400" title="Transitive dependencies that will be fixed via package manager override">
+                  {overrideCount} override{overrideCount !== 1 ? 's' : ''}
+                </span>
+              </>
+            )}
+            {breakingCount > 0 && (
+              <>
+                <div className="h-5 w-px bg-zinc-700" />
+                <span className="text-xs text-orange-400" title="Updates that require a semver-major version change">
+                  {breakingCount} breaking
+                </span>
               </>
             )}
 
@@ -1179,10 +1179,9 @@ interface PatchRowProps {
 
 function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject }: PatchRowProps) {
   const [showDetails, setShowDetails] = useState(false);
-  const isUnfixable = item.type === 'vulnerability' && item.fixAvailable === false;
   const isTransitive = item.isDirect === false;
   const isHeld = item.isHeld === true;
-  const isDisabled = isUnfixable || isHeld;
+  const isDisabled = isHeld;
 
   const handleHoldClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1197,15 +1196,15 @@ function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject }: 
   return (
     <div className="rounded-lg border transition-colors overflow-hidden"
       style={{
-        backgroundColor: isHeld ? 'rgba(24, 24, 27, 0.5)' : isSelected ? 'rgba(168, 85, 247, 0.1)' : isUnfixable ? 'rgba(245, 158, 11, 0.05)' : 'rgb(24, 24, 27)',
-        borderColor: isHeld ? 'rgba(39, 39, 42, 0.5)' : isSelected ? 'rgba(168, 85, 247, 0.3)' : isUnfixable ? 'rgba(245, 158, 11, 0.2)' : 'rgb(39, 39, 42)',
+        backgroundColor: isHeld ? 'rgba(24, 24, 27, 0.5)' : isSelected ? 'rgba(168, 85, 247, 0.1)' : 'rgb(24, 24, 27)',
+        borderColor: isHeld ? 'rgba(39, 39, 42, 0.5)' : isSelected ? 'rgba(168, 85, 247, 0.3)' : 'rgb(39, 39, 42)',
         opacity: isHeld ? 0.6 : 1,
       }}
     >
       <div
         className={cn(
           'flex items-center gap-4 p-4 cursor-pointer',
-          !isHeld && !isSelected && !isUnfixable && 'hover:bg-zinc-800/50'
+          !isHeld && !isSelected && 'hover:bg-zinc-800/50'
         )}
         onClick={() => !isHeld && onToggle(itemKey)}
       >
@@ -1228,7 +1227,7 @@ function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject }: 
                 </span>
                 <span className="text-zinc-600">→</span>
                 <span className={cn('font-mono text-sm', isHeld ? 'text-zinc-500' : 'text-green-400')}>
-                  {item.targetVersion}
+                  {item.targetVersion === 'resolve-latest' ? 'latest' : item.targetVersion}
                 </span>
               </>
             )}
@@ -1241,10 +1240,15 @@ function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject }: 
                 On hold
               </Badge>
             )}
-            {isUnfixable && !isHeld && (
-              <Badge variant="outline" className="text-xs bg-amber-500/10 border-amber-500/30 text-amber-400">
+            {item.fixViaOverride && !isHeld && (
+              <Badge variant="outline" className="text-xs bg-blue-500/10 border-blue-500/30 text-blue-400">
+                Override
+              </Badge>
+            )}
+            {item.isBreakingFix && !isHeld && (
+              <Badge variant="outline" className="text-xs bg-orange-500/10 border-orange-500/30 text-orange-400">
                 <AlertTriangle className="h-3 w-3 mr-1" />
-                No fix available
+                Breaking
               </Badge>
             )}
             {/* CVE badges */}
@@ -1270,10 +1274,15 @@ function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject }: 
               ))}
             </div>
           )}
-          {/* Parent package at latest indicator */}
-          {isTransitive && item.parentPackage && (
-            <p className="text-xs text-amber-500/70 mt-1">
-              ⚠ {item.parentPackage} needs to update its dependencies
+          {/* Fix strategy for transitive dependencies */}
+          {isTransitive && item.fixByParent && !item.fixViaOverride && (
+            <p className="text-xs text-green-400/70 mt-1">
+              Fix: update {item.fixByParent.name} to {item.fixByParent.version}
+            </p>
+          )}
+          {isTransitive && item.fixViaOverride && (
+            <p className="text-xs text-blue-400/70 mt-1">
+              Fix: package manager override{item.fixByParent ? ` (updating ${item.fixByParent.name} requires breaking change)` : ''}
             </p>
           )}
           {showProject && (
@@ -1341,7 +1350,13 @@ function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject }: 
                 <div>
                   <span className="text-zinc-500">Fix Available:</span>
                   <span className={cn('ml-2', item.fixAvailable ? 'text-green-400' : 'text-amber-400')}>
-                    {item.fixAvailable ? 'Yes' : 'No'}
+                    {item.fixAvailable
+                      ? item.fixViaOverride
+                        ? 'Yes (via override)'
+                        : item.fixByParent
+                        ? `Yes (update ${item.fixByParent.name})`
+                        : 'Yes'
+                      : 'No'}
                   </span>
                 </div>
               </>
