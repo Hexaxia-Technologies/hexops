@@ -62,7 +62,7 @@ export function startProject(
         return { success: false, error: 'No build script defined for production mode' };
       }
       if (!project.scripts.start) {
-        return { success: false, error: 'No start script defined for production mode' };
+        addLogEntry(project.id, 'stdout', 'No start script defined, falling back to dev script');
       }
 
       // Run build synchronously
@@ -87,7 +87,9 @@ export function startProject(
     }
 
     // Determine which script to run
-    const script = mode === 'prod' ? project.scripts.start : project.scripts.dev;
+    const script = mode === 'prod'
+      ? (project.scripts.start || project.scripts.dev)
+      : project.scripts.dev;
     if (!script) {
       return { success: false, error: `No ${mode} script defined` };
     }
