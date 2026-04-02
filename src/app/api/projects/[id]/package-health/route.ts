@@ -12,6 +12,7 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 interface Dependency {
   name: string;
   current: string;
+  specifier: string;  // Raw version from package.json (e.g. "^0.78.0")
   wanted?: string;
   latest?: string;
   isOutdated: boolean;
@@ -60,6 +61,7 @@ export async function GET(
         return {
           name,
           current: version.replace(/^[\^~]/, ''),
+          specifier: version,
           wanted: outdated?.wanted,
           latest: outdated?.latest,
           isOutdated: !!outdated,

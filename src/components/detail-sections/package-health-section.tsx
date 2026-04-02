@@ -24,6 +24,7 @@ interface PackageHealthSectionProps {
 interface Dependency {
   name: string;
   current: string;
+  specifier?: string;  // Raw version from package.json (e.g. "^0.78.0")
   wanted?: string;
   latest?: string;
   isOutdated: boolean;
@@ -262,23 +263,29 @@ export function PackageHealthSection({ projectId, projectName, initialOutdatedCo
         <div className="space-y-2">
           <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Vulnerabilities</h4>
           <div className="space-y-1">
-            {health.vulnerabilities.map((vuln, i) => (
-              <div
-                key={i}
-                className="flex items-center justify-between py-2 px-3 bg-zinc-900 rounded text-sm"
-              >
-                <div className="flex items-center gap-2">
-                  <SeverityBadge severity={vuln.severity} />
-                  <span className="font-mono text-zinc-300">{vuln.name}</span>
-                  <span className="text-zinc-500 truncate max-w-[200px]">{vuln.title}</span>
+            {health.vulnerabilities.map((vuln, i) => {
+              const dep = [...health.dependencies, ...health.devDependencies].find(d => d.name === vuln.name);
+              return (
+                <div
+                  key={i}
+                  className="flex items-center justify-between py-2 px-3 bg-zinc-900 rounded text-sm"
+                >
+                  <div className="flex items-center gap-2">
+                    <SeverityBadge severity={vuln.severity} />
+                    <span className="font-mono text-zinc-300">{vuln.name}</span>
+                    {dep?.specifier && (
+                      <span className="font-mono text-zinc-600 text-xs">{dep.specifier}</span>
+                    )}
+                    <span className="text-zinc-500 truncate max-w-[200px]">{vuln.title}</span>
+                  </div>
+                  {vuln.fixAvailable && (
+                    <Badge variant="outline" className="text-xs border-green-500/50 text-green-400">
+                      Fix available
+                    </Badge>
+                  )}
                 </div>
-                {vuln.fixAvailable && (
-                  <Badge variant="outline" className="text-xs border-green-500/50 text-green-400">
-                    Fix available
-                  </Badge>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -445,6 +452,9 @@ function DependencyList({ deps, selectedPackages, onToggleSelect, holds }: Depen
                 'text-zinc-500'
               )}>
                 {dep.current}
+                {dep.specifier && dep.specifier !== dep.current && (
+                  <span className="text-zinc-600 ml-1">({dep.specifier})</span>
+                )}
               </span>
               {dep.isOutdated && dep.latest && (
                 <>
