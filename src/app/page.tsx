@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { ProjectList } from '@/components/project-list';
@@ -41,7 +41,8 @@ function HomeContent() {
 
   const fetchProjects = useCallback(async () => {
     try {
-      const res = await fetch('/api/projects');
+      const res = await fetch('/api/projects').catch(() => null);
+      if (!res || !res.ok) return;
       const data = await res.json();
       setProjects(data.projects || []);
       setCategories(data.categories || []);
@@ -55,7 +56,8 @@ function HomeContent() {
 
   const fetchPatchStatus = useCallback(async () => {
     try {
-      const res = await fetch('/api/patches');
+      const res = await fetch('/api/patches').catch(() => null);
+      if (!res || !res.ok) return;
       const data = await res.json();
 
       if (data.queue !== undefined && data.projectCount !== undefined) {
@@ -240,10 +242,18 @@ function HomeContent() {
     return project.category === selectedCategory;
   });
 
-  // Get detail project - safely handle case where project might not exist
-  const detailProject = viewMode === 'detail' && detailProjectId
+  // Get detail project - keep previous project data during refreshes to prevent
+  // the detail view from unmounting/remounting while polling or during HMR
+  const detailProjectRef = useRef<Project | null>(null);
+  const detailProjectFromList = viewMode === 'detail' && detailProjectId
     ? projects.find(p => p.id === detailProjectId)
     : null;
+  if (detailProjectFromList) {
+    detailProjectRef.current = detailProjectFromList;
+  } else if (viewMode !== 'detail' || !detailProjectId) {
+    detailProjectRef.current = null;
+  }
+  const detailProject = detailProjectFromList ?? detailProjectRef.current;
 
   if (isLoading) {
     return (
