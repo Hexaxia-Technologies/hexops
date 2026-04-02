@@ -20,6 +20,7 @@ import {
   reconcilePatchHistory,
 } from './patch-storage';
 import { scanSpecVulnerabilities } from './spec-scanner';
+import { checkLockFileFreshness } from './lockfile-checker';
 
 const execAsync = promisify(exec);
 
@@ -406,6 +407,23 @@ export async function scanProject(
   const auditKeys = new Set(auditVulns.map(v => v.name));
   const uniqueSpecVulns = specVulns.filter(sv => !auditKeys.has(sv.name));
   const vulnerabilities = [...auditVulns, ...uniqueSpecVulns];
+
+  // Check for stale lock files (will cause Vercel/CI deploy failures)
+  const lockCheck = checkLockFileFreshness(project.path);
+  if (!lockCheck.fresh) {
+    for (const mismatch of lockCheck.mismatches) {
+      vulnerabilities.push({
+        name: mismatch.package,
+        severity: 'info',
+        title: `[Stale lockfile] spec ${mismatch.packageJsonSpec} but lock has ${mismatch.lockfileSpec} - run \`${lockCheck.lockfileType} install\` to fix`,
+        path: mismatch.package,
+        fixAvailable: true,
+        fixVersion: mismatch.packageJsonSpec,
+        currentVersion: `lock: ${mismatch.lockfileSpec}`,
+        isDirect: true,
+      });
+    }
+  }
 
   // Create and save cache
   const cache = createProjectCache(project.id, outdated, vulnerabilities);

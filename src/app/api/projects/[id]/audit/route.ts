@@ -7,6 +7,7 @@ import { existsSync, readFileSync } from 'fs';
 import { auditCache } from '../package-health/route';
 import { detectPackageManager } from '@/lib/patch-scanner';
 import { scanSpecVulnerabilities } from '@/lib/spec-scanner';
+import { checkLockFileFreshness } from '@/lib/lockfile-checker';
 
 const execAsync = promisify(exec);
 
@@ -162,6 +163,21 @@ To run a security audit, run one of these commands in the project directory:
       }
     } catch (error) {
       console.error('Spec scanner failed:', error);
+    }
+
+    // Check for stale lock files
+    const lockCheck = checkLockFileFreshness(cwd);
+    if (!lockCheck.fresh) {
+      for (const mismatch of lockCheck.mismatches) {
+        vulnerabilities.push({
+          name: mismatch.package,
+          severity: 'info',
+          title: `Stale lockfile: spec ${mismatch.packageJsonSpec} but lock has ${mismatch.lockfileSpec}`,
+          path: mismatch.package,
+          fixAvailable: true,
+          isDirect: true,
+        });
+      }
     }
 
     // Get human-readable output for display
