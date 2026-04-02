@@ -6,6 +6,7 @@ import { join } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { auditCache } from '../package-health/route';
 import { detectPackageManager } from '@/lib/patch-scanner';
+import { scanSpecVulnerabilities } from '@/lib/spec-scanner';
 
 const execAsync = promisify(exec);
 
@@ -141,6 +142,26 @@ To run a security audit, run one of these commands in the project directory:
     } catch (error) {
       console.error('Audit command failed:', error);
       // Continue with empty vulnerabilities
+    }
+
+    // Run spec scanner (catches pinned vulnerable versions without lock files)
+    try {
+      const specVulns = await scanSpecVulnerabilities(cwd);
+      const auditNames = new Set(vulnerabilities.map(v => v.name));
+      for (const sv of specVulns) {
+        if (!auditNames.has(sv.name)) {
+          vulnerabilities.push({
+            name: sv.name,
+            severity: sv.severity,
+            title: sv.title,
+            path: sv.path,
+            fixAvailable: sv.fixAvailable,
+            isDirect: true,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Spec scanner failed:', error);
     }
 
     // Get human-readable output for display

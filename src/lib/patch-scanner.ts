@@ -19,6 +19,7 @@ import {
   updateProjectPatchState,
   reconcilePatchHistory,
 } from './patch-storage';
+import { scanSpecVulnerabilities } from './spec-scanner';
 
 const execAsync = promisify(exec);
 
@@ -393,11 +394,18 @@ export async function scanProject(
     if (cached) return cached;
   }
 
-  // Run scans in parallel
-  const [outdated, vulnerabilities] = await Promise.all([
+  // Run scans in parallel (spec scanner works without lock files)
+  const [outdated, auditVulns, specVulns] = await Promise.all([
     scanOutdated(project),
     scanVulnerabilities(project),
+    scanSpecVulnerabilities(project.path),
   ]);
+
+  // Merge spec vulnerabilities with audit vulnerabilities, avoiding duplicates
+  // A spec vuln is a duplicate if audit already found the same package+CVE
+  const auditKeys = new Set(auditVulns.map(v => v.name));
+  const uniqueSpecVulns = specVulns.filter(sv => !auditKeys.has(sv.name));
+  const vulnerabilities = [...auditVulns, ...uniqueSpecVulns];
 
   // Create and save cache
   const cache = createProjectCache(project.id, outdated, vulnerabilities);
