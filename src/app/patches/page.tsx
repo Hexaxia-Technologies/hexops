@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { PatchesSidebar, type UpdateResult, type UpdateStatus } from '@/components/patches-sidebar';
-import { RefreshCw, Shield, Package, ArrowUp, List, FolderTree, ChevronDown, ChevronRight, AlertTriangle, Link as LinkIcon, PauseCircle, PlayCircle, ExternalLink, HelpCircle } from 'lucide-react';
+import { RefreshCw, Shield, Package, ArrowUp, List, FolderTree, ChevronDown, ChevronRight, AlertTriangle, Link as LinkIcon, PauseCircle, PlayCircle, ExternalLink, HelpCircle, Wrench } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import type { PatchQueueItem, PatchSummary } from '@/lib/types';
@@ -111,6 +111,7 @@ export default function PatchesPage() {
   const [projectGitStates, setProjectGitStates] = useState<Record<string, ProjectGitState>>({});
   const [scanProgress, setScanProgress] = useState<{ scanned: number; total: number; currentProject: string } | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const [resolvingProjects, setResolvingProjects] = useState<Set<string>>(new Set());
 
   const fetchPatches = useCallback((bustCache = false) => {
     // Close any existing connection
@@ -636,6 +637,31 @@ export default function PatchesPage() {
     }
   };
 
+  const handleResolveLockfile = async (projectId: string) => {
+    setResolvingProjects(prev => new Set(prev).add(projectId));
+    try {
+      const res = await fetch(`/api/projects/${projectId}/resolve-lockfile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const result = await res.json();
+      if (result.success) {
+        toast.success(`Lock file resolved (${result.mode}) — ${result.packageManager} via ${result.detectedVia}`);
+      } else {
+        toast.error(`Lock file resolution failed: ${result.error ?? 'Unknown error'}`);
+      }
+    } catch (err) {
+      toast.error('Failed to resolve lock file');
+    } finally {
+      setResolvingProjects(prev => {
+        const next = new Set(prev);
+        next.delete(projectId);
+        return next;
+      });
+    }
+  };
+
   const handleUpdateSelected = async () => {
     if (!data || selectedPackages.size === 0) return;
 
@@ -1089,8 +1115,19 @@ export default function PatchesPage() {
                         </Button>
                       )}
                     </div>
-                    {/* Right side: git controls */}
+                    {/* Right side: resolve + git controls */}
                     <div className="flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-500/10"
+                        onClick={(e) => { e.stopPropagation(); handleResolveLockfile(group.projectId); }}
+                        disabled={resolvingProjects.has(group.projectId)}
+                        title="Resolve lock file before patching"
+                      >
+                        <Wrench className={cn('h-3 w-3 mr-1', resolvingProjects.has(group.projectId) && 'animate-spin')} />
+                        {resolvingProjects.has(group.projectId) ? 'Resolving...' : 'Resolve Lock'}
+                      </Button>
                       {(() => {
                         const gitState = projectGitStates[group.projectId];
                         const hasPendingCommit = !!gitState?.pendingCommit;
