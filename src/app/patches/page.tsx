@@ -648,6 +648,8 @@ export default function PatchesPage() {
       const result = await res.json();
       if (result.success) {
         toast.success(`Lock file resolved (${result.mode}) — ${result.packageManager} via ${result.detectedVia}`);
+        // Rescan to update package info after resolution
+        fetchPatches(true);
       } else {
         toast.error(`Lock file resolution failed: ${result.error ?? 'Unknown error'}`);
       }
