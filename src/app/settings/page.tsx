@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { ChevronDown, ChevronRight, FolderOpen, GitBranch, Cloud, Eye, EyeOff, Check, X, Loader2, Save } from 'lucide-react';
+import { ChevronDown, ChevronRight, FolderOpen, GitBranch, Cloud, Wrench, Eye, EyeOff, Check, X, Loader2, Save } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { GlobalSettings } from '@/lib/types';
 
@@ -245,6 +245,14 @@ export default function SettingsPage() {
     });
   };
 
+  const updatePatching = (key: keyof GlobalSettings['patching'], value: GlobalSettings['patching'][typeof key]) => {
+    if (!settings) return;
+    setSettings({
+      ...settings,
+      patching: { ...settings.patching, [key]: value } as GlobalSettings['patching'],
+    });
+  };
+
   const updateVercel = (key: keyof GlobalSettings['integrations']['vercel'], value: string | null) => {
     if (!settings) return;
     setSettings({
@@ -454,6 +462,29 @@ export default function SettingsPage() {
               >
                 Verify Connection
               </Button>
+            </div>
+          </div>
+        </CollapsibleSection>
+
+        {/* Patching */}
+        <CollapsibleSection
+          title="Patching"
+          icon={<Wrench className="h-4 w-4 text-zinc-500" />}
+          defaultOpen
+        >
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-zinc-300">Default Lock File Resolution</label>
+              <p className="text-xs text-zinc-500">How HexOps handles lock files before applying patches</p>
+              <select
+                value={settings.patching?.defaultLockfileResolution ?? 'clean-slate'}
+                onChange={(e) => updatePatching('defaultLockfileResolution', e.target.value as GlobalSettings['patching']['defaultLockfileResolution'])}
+                className="w-full max-w-md px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-md text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:border-purple-500"
+              >
+                <option value="clean-slate">Clean Slate — Delete lock + node_modules, fresh install</option>
+                <option value="repair">Repair — Fix issues in place, preserve pinned versions</option>
+                <option value="preflight">Pre-flight — Check health first, prompt before fixing</option>
+              </select>
             </div>
           </div>
         </CollapsibleSection>

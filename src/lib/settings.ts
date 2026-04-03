@@ -19,6 +19,9 @@ const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = {
       pushAfterCommit: false,
     },
   },
+  patching: {
+    defaultLockfileResolution: 'clean-slate',
+  },
 };
 
 // Default project settings
@@ -40,6 +43,9 @@ const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
     healthCheckUrl: null,
     restartOnCrash: false,
     logRetentionDays: 7,
+  },
+  patching: {
+    lockfileResolution: 'global',
   },
 };
 

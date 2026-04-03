@@ -11,6 +11,7 @@ import type {
   PatchQueueItem,
   PatchSummary,
   ProjectPatchCache,
+  PackageManager,
 } from './types';
 import {
   readProjectCache,
@@ -24,12 +25,18 @@ import { checkLockFileFreshness } from './lockfile-checker';
 
 const execAsync = promisify(exec);
 
-type PackageManager = 'pnpm' | 'npm' | 'yarn';
-
 /**
- * Detect package manager from lockfile
+ * Detect package manager for a project.
+ *
+ * Detection priority:
+ * 1. Lock file (most recently modified wins)
+ * 2. packageManager field in package.json
+ * 3. Workspace config files (pnpm-workspace.yaml, .yarnrc.yml)
+ * 4. .npmrc with pnpm-specific settings
+ * 5. Falls back to npm (never returns null)
  */
-export function detectPackageManager(projectPath: string): PackageManager | null {
+export function detectPackageManager(projectPath: string): PackageManager {
+  // Strategy 1: Check existing lock files (most recently modified wins)
   const locks = [
     { pm: 'pnpm' as const, file: 'pnpm-lock.yaml' },
     { pm: 'npm' as const, file: 'package-lock.json' },
@@ -44,9 +51,76 @@ export function detectPackageManager(projectPath: string): PackageManager | null
     })
     .filter(Boolean);
 
-  if (found.length === 0) return null;
-  // Most recently modified lockfile wins
-  return found.sort((a, b) => b!.mtime - a!.mtime)[0]!.pm;
+  if (found.length > 0) {
+    return found.sort((a, b) => b!.mtime - a!.mtime)[0]!.pm;
+  }
+
+  // Strategy 2: Check packageManager field in package.json
+  const pkgJsonPath = join(projectPath, 'package.json');
+  if (existsSync(pkgJsonPath)) {
+    try {
+      const pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf-8'));
+      if (typeof pkgJson.packageManager === 'string') {
+        const pmName = pkgJson.packageManager.split('@')[0];
+        if (pmName === 'pnpm') return 'pnpm';
+        if (pmName === 'yarn') return 'yarn';
+        if (pmName === 'npm') return 'npm';
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+
+  // Strategy 3: Check for workspace config files
+  if (existsSync(join(projectPath, 'pnpm-workspace.yaml'))) return 'pnpm';
+  if (existsSync(join(projectPath, '.yarnrc.yml')) || existsSync(join(projectPath, '.yarnrc'))) return 'yarn';
+
+  // Strategy 4: Check for .npmrc with pnpm-specific settings
+  const npmrcPath = join(projectPath, '.npmrc');
+  if (existsSync(npmrcPath)) {
+    try {
+      const npmrc = readFileSync(npmrcPath, 'utf-8');
+      if (npmrc.includes('shamefully-hoist') || npmrc.includes('strict-peer-dependencies')) {
+        return 'pnpm';
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Strategy 5: Default to npm
+  return 'npm';
+}
+
+/**
+ * Determine how the package manager was detected (for logging/UI)
+ */
+export function getDetectionSource(projectPath: string): 'lockfile' | 'packageJson' | 'workspaceConfig' | 'npmrc' | 'fallback' {
+  const lockFiles = ['pnpm-lock.yaml', 'package-lock.json', 'yarn.lock'];
+  for (const lf of lockFiles) {
+    if (existsSync(join(projectPath, lf))) return 'lockfile';
+  }
+
+  const pkgPath = join(projectPath, 'package.json');
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+      if (pkg.packageManager) return 'packageJson';
+    } catch {}
+  }
+
+  if (existsSync(join(projectPath, 'pnpm-workspace.yaml'))) return 'workspaceConfig';
+  if (existsSync(join(projectPath, '.yarnrc.yml')) || existsSync(join(projectPath, '.yarnrc'))) return 'workspaceConfig';
+
+  const npmrcPath = join(projectPath, '.npmrc');
+  if (existsSync(npmrcPath)) {
+    try {
+      const npmrc = readFileSync(npmrcPath, 'utf-8');
+      if (npmrc.includes('shamefully-hoist') || npmrc.includes('strict-peer-dependencies')) return 'npmrc';
+    } catch {}
+  }
+
+  return 'fallback';
 }
 
 /**
@@ -75,7 +149,6 @@ export async function scanOutdated(
   project: ProjectConfig
 ): Promise<OutdatedPackage[]> {
   const pm = detectPackageManager(project.path);
-  if (!pm) return [];
 
   try {
     let output = '';
@@ -167,7 +240,6 @@ export async function scanVulnerabilities(
   project: ProjectConfig
 ): Promise<VulnerabilityInfo[]> {
   const pm = detectPackageManager(project.path);
-  if (!pm) return [];
 
   try {
     let output = '';

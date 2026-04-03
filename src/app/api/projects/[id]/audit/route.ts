@@ -55,22 +55,6 @@ export async function POST(
 
     const pm = detectPackageManager(cwd);
 
-    if (!pm) {
-      const rawOutput = `No lockfile found in ${cwd}
-
-To run a security audit, run one of these commands in the project directory:
-  pnpm install   (creates pnpm-lock.yaml)
-  npm install    (creates package-lock.json)
-  yarn install   (creates yarn.lock)`;
-
-      return NextResponse.json({
-        success: true,
-        vulnerabilities: [],
-        count: 0,
-        rawOutput,
-      });
-    }
-
     try {
       // Use the appropriate package manager based on lockfile
       let auditOutput: string;

@@ -10,10 +10,12 @@ import {
   invalidateProjectCache,
 } from '@/lib/patch-storage';
 import { getUpdateType, detectPackageManager } from '@/lib/patch-scanner';
+import { resolveLockfile } from '@/lib/lockfile-resolver';
+import { getGlobalSettings, getProjectSettings } from '@/lib/settings';
 import { invalidatePackageStatusCache } from '@/lib/extended-status';
 import { clearInMemoryCache } from '@/app/api/projects/[id]/package-health/route';
 import { logger } from '@/lib/logger';
-import type { PatchHistoryEntry } from '@/lib/types';
+import type { PatchHistoryEntry, LockfileResolutionMode } from '@/lib/types';
 
 const execAsync = promisify(exec);
 
@@ -99,6 +101,7 @@ interface UpdateRequestBody {
     fixViaOverride?: boolean;
     fixByParent?: { name: string; version: string };
   }>;
+  lockfileResolution?: LockfileResolutionMode;
 }
 
 export async function POST(
@@ -121,16 +124,28 @@ export async function POST(
 
     const cwd = project.path;
 
-    // Detect package manager from lockfile (newest lockfile wins when multiple exist)
-    const packageManager = detectPackageManager(cwd);
+    // Determine lockfile resolution mode
+    const projectSettings = getProjectSettings(id);
+    const globalSettings = getGlobalSettings();
+    const resolutionMode: LockfileResolutionMode =
+      body.lockfileResolution ??
+      (projectSettings.patching?.lockfileResolution === 'global'
+        ? globalSettings.patching?.defaultLockfileResolution
+        : projectSettings.patching?.lockfileResolution as LockfileResolutionMode) ??
+      'clean-slate';
 
-    if (!packageManager) {
+    // Run lockfile resolution before attempting patches
+    const resolution = await resolveLockfile(cwd, resolutionMode);
+    if (!resolution.success) {
       return NextResponse.json({
         success: false,
-        error: 'No lockfile found. Run install first.',
-        output: `No lockfile found in ${cwd}`,
-      });
+        error: `Lockfile resolution (${resolutionMode}) failed`,
+        resolution,
+      }, { status: 500 });
     }
+
+    // Use the resolved package manager
+    const packageManager = resolution.packageManager;
 
     // Check if this is a workspace project (has workspaces in package.json)
     let isWorkspaceProject = false;

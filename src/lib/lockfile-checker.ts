@@ -21,7 +21,6 @@ export interface LockfileCheckResult {
  */
 export function checkLockFileFreshness(projectPath: string): LockfileCheckResult {
   const pm = detectPackageManager(projectPath);
-  if (!pm) return { fresh: true, mismatches: [], lockfileType: null };
 
   const pkgJsonPath = join(projectPath, 'package.json');
   if (!existsSync(pkgJsonPath)) return { fresh: true, mismatches: [], lockfileType: pm };

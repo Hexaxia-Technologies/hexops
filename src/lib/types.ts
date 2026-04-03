@@ -56,6 +56,9 @@ export interface GlobalSettings {
       pushAfterCommit: boolean;
     };
   };
+  patching: {
+    defaultLockfileResolution: LockfileResolutionMode;
+  };
 }
 
 export interface ProjectSettings {
@@ -76,6 +79,9 @@ export interface ProjectSettings {
     healthCheckUrl: string | null;
     restartOnCrash: boolean;
     logRetentionDays: number;
+  };
+  patching: {
+    lockfileResolution: LockfileResolutionMode | 'global';
   };
 }
 
@@ -101,6 +107,20 @@ export interface LogEntry {
   timestamp: Date;
   type: 'stdout' | 'stderr';
   message: string;
+}
+
+// Lock File Resolution Types
+
+export type LockfileResolutionMode = 'clean-slate' | 'repair' | 'preflight';
+export type PackageManager = 'npm' | 'pnpm' | 'yarn';
+
+export interface LockfileResolutionResult {
+  mode: LockfileResolutionMode;
+  success: boolean;
+  packageManager: PackageManager;
+  detectedVia: 'lockfile' | 'packageJson' | 'workspaceConfig' | 'npmrc' | 'fallback';
+  actions: string[];
+  error?: string;
 }
 
 // Patch Management Types
@@ -169,6 +189,11 @@ export interface PatchHistoryEntry {
   success: boolean;
   output: string;
   error?: string;
+  lockfileResolution?: {
+    mode: LockfileResolutionMode;
+    detectedVia: string;
+    actions: string[];
+  };
 }
 
 export interface PatchHistory {

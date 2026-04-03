@@ -396,6 +396,23 @@ export function SettingsSection({ projectId }: SettingsSectionProps) {
         />
       </div>
 
+      {/* Patching */}
+      <SubsectionHeader title="Patching" />
+      <div className="space-y-3">
+        <Select
+          label="Lock File Resolution"
+          description="How lock files are handled before applying patches"
+          value={settings.patching?.lockfileResolution ?? 'global'}
+          onChange={(v) => updateNestedSetting('patching', 'lockfileResolution', v as 'global' | 'clean-slate' | 'repair' | 'preflight')}
+          options={[
+            { value: 'global', label: 'Use global default' },
+            { value: 'clean-slate', label: 'Clean Slate — Delete lock + node_modules, fresh install' },
+            { value: 'repair', label: 'Repair — Fix issues in place, preserve pinned versions' },
+            { value: 'preflight', label: 'Pre-flight — Check health first, prompt before fixing' },
+          ]}
+        />
+      </div>
+
       {/* Monitoring */}
       <SubsectionHeader title="Monitoring" />
       <div className="space-y-3">
