@@ -25,12 +25,27 @@ export function checkLockFileFreshness(projectPath: string): LockfileCheckResult
   const pkgJsonPath = join(projectPath, 'package.json');
   if (!existsSync(pkgJsonPath)) return { fresh: true, mismatches: [], lockfileType: pm };
 
-  let pkgJson: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+  let pkgJson: {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+    overrides?: Record<string, string>;
+    pnpm?: { overrides?: Record<string, string> };
+    resolutions?: Record<string, string>;
+  };
   try {
     pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf-8'));
   } catch {
     return { fresh: true, mismatches: [], lockfileType: pm };
   }
+
+  // Collect packages that have a package manager override/resolution.
+  // When an override exists, pnpm/npm records the OVERRIDE spec in the lockfile
+  // (not the direct dep spec), so a mismatch is expected and not a stale lockfile.
+  const overriddenPackages = new Set<string>([
+    ...Object.keys(pkgJson.pnpm?.overrides || {}),
+    ...Object.keys(pkgJson.overrides || {}),
+    ...Object.keys(pkgJson.resolutions || {}),
+  ]);
 
   const allDeps: Record<string, { spec: string; section: 'dependencies' | 'devDependencies' }> = {};
   for (const [name, spec] of Object.entries(pkgJson.dependencies || {})) {
@@ -57,6 +72,10 @@ export function checkLockFileFreshness(projectPath: string): LockfileCheckResult
   const mismatches: LockfileMismatch[] = [];
 
   for (const [name, { spec, section }] of Object.entries(allDeps)) {
+    // Skip packages that have an override — pnpm/npm writes the override spec
+    // into the lockfile, not the direct dep spec, so differences are expected.
+    if (overriddenPackages.has(name)) continue;
+
     const lockSpec = lockfileSpecs[name];
     if (lockSpec && lockSpec !== spec) {
       mismatches.push({
