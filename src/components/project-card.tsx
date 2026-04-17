@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,14 @@ interface ProjectCardProps {
 export function ProjectCard({ project, onStart, onStop, onViewLogs, onClearCache, onDeleteLock }: ProjectCardProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [dependabotManaged, setDependabotManaged] = useState<boolean>(false);
+
+  useEffect(() => {
+    fetch(`/api/projects/${project.id}/dependabot`)
+      .then((r) => r.json())
+      .then((data) => setDependabotManaged(data.managed ?? false))
+      .catch(() => {});
+  }, [project.id]);
 
   const handleToggle = async () => {
     setIsLoading(true);
@@ -89,12 +97,22 @@ export function ProjectCard({ project, onStart, onStop, onViewLogs, onClearCache
         </CardHeader>
         <CardContent className="pt-2 space-y-2">
           <div className="flex items-center justify-between">
-            <Badge
-              variant="secondary"
-              className="bg-zinc-800 text-zinc-400 text-xs"
-            >
-              {project.category}
-            </Badge>
+            <div className="flex items-center gap-2">
+              <Badge
+                variant="secondary"
+                className="bg-zinc-800 text-zinc-400 text-xs"
+              >
+                {project.category}
+              </Badge>
+              {dependabotManaged && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/10 px-2 py-0.5 text-xs font-medium text-orange-400 ring-1 ring-orange-500/20">
+                  <svg className="h-3 w-3" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM4.5 7.5a.5.5 0 0 0 0 1h5.793l-2.147 2.146a.5.5 0 0 0 .708.708l3-3a.5.5 0 0 0 0-.708l-3-3a.5.5 0 1 0-.708.708L10.293 7.5H4.5Z" />
+                  </svg>
+                  Dependabot
+                </span>
+              )}
+            </div>
             <div className="flex gap-2">
               {isRunning && (
                 <>
