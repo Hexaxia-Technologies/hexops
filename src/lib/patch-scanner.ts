@@ -22,6 +22,7 @@ import {
 } from './patch-storage';
 import { scanSpecVulnerabilities } from './spec-scanner';
 import { checkLockFileFreshness } from './lockfile-checker';
+import { hasDependabotConfig } from './dependabot-detector';
 
 const execAsync = promisify(exec);
 
@@ -467,6 +468,9 @@ export async function scanProject(
     if (cached) return cached;
   }
 
+  // Detect dependabot management early (used to annotate scan results)
+  const isManaged = hasDependabotConfig(project.path);
+
   // Run scans in parallel (spec scanner works without lock files)
   const [outdated, auditVulns, specVulns] = await Promise.all([
     scanOutdated(project),
@@ -497,8 +501,12 @@ export async function scanProject(
     }
   }
 
+  // Annotate results with dependabot management status
+  const annotatedOutdated = outdated.map((pkg) => ({ ...pkg, dependabotManaged: isManaged }));
+  const annotatedVulnerabilities = vulnerabilities.map((v) => ({ ...v, dependabotManaged: isManaged }));
+
   // Create and save cache
-  const cache = createProjectCache(project.id, outdated, vulnerabilities);
+  const cache = createProjectCache(project.id, annotatedOutdated, annotatedVulnerabilities);
   writeProjectCache(cache);
 
   // Update aggregate state

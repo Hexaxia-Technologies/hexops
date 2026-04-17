@@ -12,6 +12,10 @@ export interface ProjectConfig {
   };
   holds?: string[];  // Package names on hold (excluded from updates)
   settings?: Partial<ProjectSettings>;  // Per-project settings overrides
+  github?: {
+    owner: string;
+    repo: string;
+  };
 }
 
 export interface ProjectExtendedStatus {
@@ -54,6 +58,9 @@ export interface GlobalSettings {
       defaultBranch: string;
       commitPrefix: string;
       pushAfterCommit: boolean;
+    };
+    github: {
+      token: string | null;
     };
   };
   patching: {
@@ -121,6 +128,31 @@ export interface LockfileResolutionResult {
   detectedVia: 'lockfile' | 'packageJson' | 'workspaceConfig' | 'npmrc' | 'fallback';
   actions: string[];
   error?: string;
+}
+
+// Dependabot Types
+
+export interface DependabotPR {
+  number: number;
+  title: string;
+  url: string;
+  state: 'open' | 'closed' | 'merged';
+  mergeable: boolean | null;
+  draft: boolean;
+  createdAt: string;
+  updatedAt: string;
+  labels: string[];
+  updateType: 'version-update:semver-patch' | 'version-update:semver-minor' | 'version-update:semver-major' | string;
+  dependencyGroup: string | null;
+}
+
+export interface DependabotConfig {
+  managed: boolean;
+  owner: string | null;
+  repo: string | null;
+  prs: DependabotPR[];
+  fetchedAt: string | null;
+  error: string | null;
 }
 
 // Patch Management Types
@@ -206,6 +238,7 @@ export interface OutdatedPackage {
   wanted: string;
   latest: string;
   type: 'dependencies' | 'devDependencies';
+  dependabotManaged?: boolean;
 }
 
 export interface VulnerabilityInfo {
@@ -228,6 +261,7 @@ export interface VulnerabilityInfo {
   cves?: string[];              // CVE identifiers (e.g., ["CVE-2024-12345"])
   url?: string;                 // Link to advisory (GitHub/npm)
   advisoryId?: number;          // npm advisory ID
+  dependabotManaged?: boolean;
 }
 
 export interface ProjectPatchCache {
