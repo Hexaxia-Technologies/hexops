@@ -10,6 +10,7 @@ import { RefreshCw, Shield, Package, ArrowUp, List, FolderTree, ChevronDown, Che
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import type { PatchQueueItem, PatchSummary } from '@/lib/types';
+import { DependabotPanel } from '@/components/detail-sections/dependabot-panel';
 import { generatePatchCommitMessage, type UpdatedPackage } from '@/lib/patch-commit-message';
 import { GitCommit, Upload, Pencil, X } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
@@ -112,6 +113,7 @@ export default function PatchesPage() {
   const [scanProgress, setScanProgress] = useState<{ scanned: number; total: number; currentProject: string } | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const [resolvingProjects, setResolvingProjects] = useState<Set<string>>(new Set());
+  const [dependabotMap, setDependabotMap] = useState<Record<string, boolean>>({});
 
   const fetchPatches = useCallback((bustCache = false) => {
     // Close any existing connection
@@ -289,6 +291,23 @@ export default function PatchesPage() {
 
     fetchAllGitStatuses();
   }, [data, fetchProjectGitStatus]);
+
+  // Fetch dependabot status for all projects once data loads
+  useEffect(() => {
+    if (!data) return;
+    const projectIds = Object.keys(data.projectNames);
+    if (!projectIds.length) return;
+    Promise.all(
+      projectIds.map((id) =>
+        fetch(`/api/projects/${id}/dependabot`)
+          .then((r) => r.json())
+          .then((result) => [id, result.managed] as const)
+          .catch(() => [id, false] as const)
+      )
+    ).then((results) => {
+      setDependabotMap(Object.fromEntries(results));
+    });
+  }, [data]);
 
   // Set pending commit for a project after updates
   const setPendingCommit = useCallback((
@@ -1237,24 +1256,34 @@ export default function PatchesPage() {
 
                   {/* Project Patches */}
                   {expandedProjects.has(group.projectId) && (
-                    <div className="p-2 space-y-2 bg-zinc-950">
-                      {group.patches.map((item) => {
-                        const key = getItemKey(item);
-                        const isSelected = selectedPackages.has(key);
+                    dependabotMap[group.projectId] ? (
+                      <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-1 m-2">
+                        <div className="flex items-center gap-2 px-3 py-2 border-b border-orange-500/10">
+                          <span className="text-xs font-medium text-orange-400">Dependabot Managed</span>
+                          <span className="text-xs text-zinc-500">— manual patching disabled</span>
+                        </div>
+                        <DependabotPanel projectId={group.projectId} />
+                      </div>
+                    ) : (
+                      <div className="p-2 space-y-2 bg-zinc-950">
+                        {group.patches.map((item) => {
+                          const key = getItemKey(item);
+                          const isSelected = selectedPackages.has(key);
 
-                        return (
-                          <PatchRow
-                            key={key}
-                            item={item}
-                            itemKey={key}
-                            isSelected={isSelected}
-                            onToggle={toggleSelection}
-                            onHold={handleHold}
-                            showProject={false}
-                          />
-                        );
-                      })}
-                    </div>
+                          return (
+                            <PatchRow
+                              key={key}
+                              item={item}
+                              itemKey={key}
+                              isSelected={isSelected}
+                              onToggle={toggleSelection}
+                              onHold={handleHold}
+                              showProject={false}
+                            />
+                          );
+                        })}
+                      </div>
+                    )
                   )}
                 </div>
               );
