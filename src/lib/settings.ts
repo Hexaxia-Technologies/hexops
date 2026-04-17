@@ -18,6 +18,9 @@ const DEFAULT_GLOBAL_SETTINGS: GlobalSettings = {
       commitPrefix: '',
       pushAfterCommit: false,
     },
+    github: {
+      token: null,
+    },
   },
   patching: {
     defaultLockfileResolution: 'clean-slate',
