@@ -381,15 +381,19 @@ export async function scanVulnerabilities(
           }
         }
 
-        // Transitive deps: determine fix strategy
-        if (!vuln.isDirect && parentPackage) {
+        // Transitive deps: determine fix strategy.
+        // Also covers self-advisory packages (e.g. hono) where via[] contains only advisory
+        // objects (no string parent references), so parentPackage is undefined but the vuln
+        // IS in this package itself and needs a direct override.
+        if (!vuln.isDirect && (parentPackage || !fixVersion)) {
           if (fixByParent && !isBreakingFix) {
             // Best path: update the parent dependency (non-breaking)
             fixAvailable = true;
             fixVersion = fixByParent.version;
           } else {
-            // Fallback: apply a package manager override for this package directly
-            // Extract fix version from advisory range in via objects
+            // Fallback: apply a package manager override for this package directly.
+            // Extract fix version from advisory range in via objects (works for both
+            // "via parent" cases and self-advisory packages like hono).
             let overrideVersion: string | undefined;
             const viaAdvisories = vuln.via?.filter(v => typeof v === 'object' && v.range) as
               Array<{ range: string }> | undefined;
