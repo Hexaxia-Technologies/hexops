@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getProject } from '@/lib/config'
 import { addEscalation, removeEscalation, getEscalationConfig } from '@/lib/escalation-store'
 import { resolveLockfile } from '@/lib/lockfile-resolver'
-import type { EscalateAction, EscalateRecord } from '@/lib/types'
+import { detectPackageManager } from '@/lib/patch-scanner'
+import type { EscalateAction, EscalateRecord, PackageManager } from '@/lib/types'
 import { readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { execFile } from 'child_process'
@@ -10,7 +11,7 @@ import { promisify } from 'util'
 
 const execFileAsync = promisify(execFile)
 
-const LOCK_FILES: Record<string, string> = {
+const LOCK_FILES: Record<PackageManager, string> = {
   pnpm: 'pnpm-lock.yaml',
   npm: 'package-lock.json',
   yarn: 'yarn.lock',
@@ -49,6 +50,24 @@ export async function POST(
       )
     }
 
+    // Validate action
+    const validActions: EscalateAction[] = ['force_override', 'force_major', 'accepted_risk']
+    if (!validActions.includes(action)) {
+      return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
+    }
+
+    // Validate package name
+    if (!pkg || !/^[@a-z0-9][\w\-./@]*$/i.test(pkg)) {
+      return NextResponse.json({ error: 'Invalid package name' }, { status: 400 })
+    }
+    // Validate version strings (when present)
+    if (overrideVersion && !/^(latest|next|canary|[\w\-.^~<>=|@]+)$/i.test(overrideVersion)) {
+      return NextResponse.json({ error: 'Invalid override version' }, { status: 400 })
+    }
+    if (targetVersion && !/^(latest|next|canary|[\w\-.^~<>=|@]+)$/i.test(targetVersion)) {
+      return NextResponse.json({ error: 'Invalid target version' }, { status: 400 })
+    }
+
     const escalationCfg = getEscalationConfig(project)
 
     const record: EscalateRecord = {
@@ -71,47 +90,64 @@ export async function POST(
       record.overrideVersion = overrideVersion
 
       const pkgJsonPath = join(project.path, 'package.json')
-      const pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf-8'))
+      const pkgJsonRaw = readFileSync(pkgJsonPath, 'utf-8')
+      const pkgJson = JSON.parse(pkgJsonRaw)
 
-      // Inject overrides
-      pkgJson.overrides = { ...pkgJson.overrides, [pkg]: overrideVersion }
-      if (pkgJson.pnpm) {
-        pkgJson.pnpm.overrides = { ...pkgJson.pnpm.overrides, [pkg]: overrideVersion }
+      // Detect package manager before writing overrides so we use the correct key
+      const detectedPm = detectPackageManager(project.path) as PackageManager
+      const lockfileName = LOCK_FILES[detectedPm]
+
+      if (!lockfileName) {
+        return NextResponse.json({ error: `Unknown package manager: ${detectedPm}` }, { status: 500 })
       }
-      writeFileSync(pkgJsonPath, JSON.stringify(pkgJson, null, 2) + '\n')
 
-      // Regenerate lockfile
+      // Inject overrides using PM-aware key
+      if (detectedPm === 'pnpm') {
+        if (!pkgJson.pnpm) pkgJson.pnpm = {}
+        if (!pkgJson.pnpm.overrides) pkgJson.pnpm.overrides = {}
+        pkgJson.pnpm.overrides[pkg] = overrideVersion
+      } else if (detectedPm === 'npm') {
+        if (!pkgJson.overrides) pkgJson.overrides = {}
+        pkgJson.overrides[pkg] = overrideVersion
+      } else {
+        // yarn uses "resolutions"
+        if (!pkgJson.resolutions) pkgJson.resolutions = {}
+        pkgJson.resolutions[pkg] = overrideVersion
+      }
+
+      const indent = pkgJsonRaw.match(/^(\s+)/m)?.[1] || '  '
+      writeFileSync(pkgJsonPath, JSON.stringify(pkgJson, null, indent) + '\n')
+
+      // Regenerate lockfile to pick up the new override
       const lockfileResult = await resolveLockfile(project.path, 'repair')
 
       if (!lockfileResult.success) {
         // Revert package.json on failure
-        await execFileAsync('git', ['checkout', '--', 'package.json'], { cwd: project.path })
+        await execFileAsync('git', ['checkout', '--', 'package.json'], { cwd: project.path, timeout: 30000 })
         return NextResponse.json(
           { error: `Lockfile regeneration failed: ${lockfileResult.error}` },
           { status: 500 }
         )
       }
 
-      const lockfileName = LOCK_FILES[lockfileResult.packageManager]
-
       // Commit + push based on escalation config or emergency flag
       const shouldCommit = escalationCfg.autoCommit || emergency
-      if (shouldCommit) {
-        await execFileAsync(
-          'git',
-          ['add', 'package.json', lockfileName],
-          { cwd: project.path }
-        )
-        await execFileAsync(
-          'git',
-          ['commit', '-m', `fix(deps): force override ${pkg}@${overrideVersion} — ${reason}`],
-          { cwd: project.path }
-        )
+      const shouldPush = escalationCfg.autoPush || emergency
 
-        const shouldPush = escalationCfg.autoPush || emergency
-        if (shouldPush) {
-          await execFileAsync('git', ['push'], { cwd: project.path })
+      try {
+        if (shouldCommit) {
+          await execFileAsync('git', ['add', 'package.json', lockfileName], { cwd: project.path, timeout: 30000 })
+          await execFileAsync('git', ['commit', '-m', `fix(deps): force override ${pkg}@${overrideVersion} — ${reason}`], { cwd: project.path, timeout: 30000 })
         }
+        if (shouldPush) {
+          await execFileAsync('git', ['push'], { cwd: project.path, timeout: 60000 })
+        }
+      } catch (commitErr) {
+        // Revert both package.json and lockfile on failure
+        try {
+          await execFileAsync('git', ['checkout', '--', 'package.json', lockfileName], { cwd: project.path, timeout: 30000 })
+        } catch { /* ignore revert errors */ }
+        return NextResponse.json({ error: `Commit/push failed: ${commitErr instanceof Error ? commitErr.message : String(commitErr)}` }, { status: 500 })
       }
     } else if (action === 'force_major') {
       if (!targetVersion) {
@@ -136,14 +172,21 @@ export async function POST(
       writeFileSync(pkgJsonPath, JSON.stringify(pkgJson, null, 2) + '\n')
       // Do NOT commit — leave dirty for human review
     } else if (action === 'accepted_risk') {
+      let expiryWarning: string | undefined
       if (expiresAt) {
-        record.expiresAt = expiresAt
         const maxDate = new Date()
         maxDate.setDate(maxDate.getDate() + escalationCfg.acceptedRiskMaxDays)
         if (new Date(expiresAt) > maxDate) {
           record.expiresAt = maxDate.toISOString()
+          expiryWarning = `expiresAt clamped to maximum allowed value (${escalationCfg.acceptedRiskMaxDays} days)`
+        } else {
+          record.expiresAt = expiresAt
         }
       }
+
+      addEscalation(record)
+
+      return NextResponse.json({ success: true, record, ...(expiryWarning && { warning: expiryWarning }) })
     }
 
     addEscalation(record)
