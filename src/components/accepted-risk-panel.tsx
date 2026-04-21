@@ -8,12 +8,11 @@ import type { PatchQueueItem } from '@/lib/types'
 
 interface AcceptedRiskPanelProps {
   projectId: string
-  projectName: string
   items: PatchQueueItem[]   // items where escalationStatus === 'accepted_risk' or 'accepted_risk_expired'
   onReverse: (item: PatchQueueItem) => void
 }
 
-export function AcceptedRiskPanel({ projectId, projectName, items, onReverse }: AcceptedRiskPanelProps) {
+export function AcceptedRiskPanel({ projectId, items, onReverse }: AcceptedRiskPanelProps) {
   const [expanded, setExpanded] = useState(false)
   const [reversing, setReversing] = useState<string | null>(null)
 
@@ -26,12 +25,18 @@ export function AcceptedRiskPanel({ projectId, projectName, items, onReverse }: 
     if (!item.escalationId) return
     setReversing(item.escalationId)
     try {
-      await fetch(`/api/projects/${item.projectId}/escalate`, {
+      const res = await fetch(`/api/projects/${item.projectId}/escalate`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ escalationId: item.escalationId }),
       })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error((data as { error?: string }).error ?? 'Failed to reverse escalation')
+      }
       onReverse(item)
+    } catch (err) {
+      console.error('Reverse escalation failed:', err)
     } finally {
       setReversing(null)
     }
@@ -94,7 +99,7 @@ export function AcceptedRiskPanel({ projectId, projectName, items, onReverse }: 
                   variant="ghost"
                   size="sm"
                   className="h-6 text-xs shrink-0"
-                  disabled={reversing === item.escalationId}
+                  disabled={!item.escalationId || reversing === item.escalationId}
                   onClick={() => handleReverse(item)}
                 >
                   {reversing === item.escalationId ? '…' : 'Reverse'}
