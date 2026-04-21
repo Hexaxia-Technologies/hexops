@@ -215,10 +215,10 @@ export interface PatchQueueItem {
   url?: string;
   advisoryId?: number;
   // Escalation state (set by scanner when an EscalateRecord exists for this package)
-  escalationId?: string
-  escalationStatus?: 'accepted_risk' | 'accepted_risk_expired' | 'force_override_pending' | 'force_major_pending'
-  escalationReason?: string
-  escalationExpiresAt?: string
+  escalationId?: string;
+  escalationStatus?: 'accepted_risk' | 'accepted_risk_expired' | 'force_override_pending' | 'force_major_pending';
+  escalationReason?: string;
+  escalationExpiresAt?: string;
 }
 
 export interface PatchSummary {
