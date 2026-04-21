@@ -22,7 +22,7 @@ interface EscalateModalProps {
   item: PatchQueueItem | null
   projectEscalationConfig?: Partial<EscalationConfig>
   onClose: () => void
-  onSuccess: (item: PatchQueueItem) => void
+  onSuccess: () => void
 }
 
 export function EscalateModal({ open, item, projectEscalationConfig, onClose, onSuccess }: EscalateModalProps) {
@@ -76,7 +76,7 @@ export function EscalateModal({ open, item, projectEscalationConfig, onClose, on
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Escalation failed')
 
-      onSuccess(item)
+      onSuccess()
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))

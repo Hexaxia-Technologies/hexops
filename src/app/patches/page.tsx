@@ -187,7 +187,7 @@ export default function PatchesPage() {
     };
   }, []);
 
-  const handleEscalateSuccess = useCallback((_item: PatchQueueItem) => {
+  const handleEscalateSuccess = useCallback(() => {
     setEscalateModalOpen(false);
     setEscalateItem(null);
     fetchPatches(true);
@@ -1281,7 +1281,7 @@ export default function PatchesPage() {
                         <DependabotPanel projectId={group.projectId} />
                         {/* Show escalation rows for fixAvailable: false items */}
                         {group.patches.filter(p => p.fixAvailable === false).map((item) => (
-                          <div key={`${item.projectId}-${item.package}`} className="px-3 py-2 border-t border-orange-500/10">
+                          <div key={getItemKey(item)} className="px-3 py-2 border-t border-orange-500/10">
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-2">
                                 <SeverityBadge type={item.type} severity={item.severity} />
@@ -1333,7 +1333,7 @@ export default function PatchesPage() {
                         })}
                         {/* Pending Major Bump banners */}
                         {group.patches.filter(p => p.escalationStatus === 'force_major_pending').map(item => (
-                          <div key={`major-banner-${item.package}`} className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 flex items-center justify-between">
+                          <div key={`major-banner-${getItemKey(item)}`} className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 flex items-center justify-between">
                             <div className="flex items-center gap-2 text-sm">
                               <AlertTriangle className="h-4 w-4 text-amber-400" />
                               <span className="text-amber-300 font-medium">Pending Major Bump:</span>
