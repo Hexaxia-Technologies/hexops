@@ -1305,7 +1305,10 @@ export default function PatchesPage() {
                         {/* Accepted Risk Panel for Dependabot projects */}
                         <AcceptedRiskPanel
                           projectId={group.projectId}
-                          items={group.patches}
+                          items={group.patches.filter(p =>
+                            p.escalationStatus === 'accepted_risk' ||
+                            p.escalationStatus === 'accepted_risk_expired'
+                          )}
                           onReverse={(_item: PatchQueueItem) => fetchPatches(true)}
                         />
                       </div>
@@ -1339,13 +1342,22 @@ export default function PatchesPage() {
                                 <span className="text-zinc-500 text-xs">{item.currentVersion} → {item.targetVersion}</span>
                               )}
                             </div>
-                            <span className="text-xs text-zinc-500">Manual review required before commit</span>
+                            <Link
+                              href={`/projects/${group.projectId}`}
+                              className="text-xs text-amber-400 hover:text-amber-300 underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              Review & Commit →
+                            </Link>
                           </div>
                         ))}
                         {/* Accepted Risk Panel */}
                         <AcceptedRiskPanel
                           projectId={group.projectId}
-                          items={group.patches}
+                          items={group.patches.filter(p =>
+                            p.escalationStatus === 'accepted_risk' ||
+                            p.escalationStatus === 'accepted_risk_expired'
+                          )}
                           onReverse={(_item: PatchQueueItem) => fetchPatches(true)}
                         />
                       </div>
