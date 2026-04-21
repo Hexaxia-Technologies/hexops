@@ -562,7 +562,11 @@ function annotateWithEscalations(items: PatchQueueItem[]): PatchQueueItem[] {
     // If upstream now provides a fix and this is an override/major escalation,
     // auto-resolve the escalation so it re-surfaces as a normal patchable item
     if (item.fixAvailable && record.action !== 'accepted_risk') {
-      resolveEscalation(record.id)
+      try {
+        resolveEscalation(record.id)
+      } catch {
+        // Non-fatal — re-surface item even if resolve write fails
+      }
       return item // re-surface as normal patchable item
     }
 
