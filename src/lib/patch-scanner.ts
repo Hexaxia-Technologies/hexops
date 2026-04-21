@@ -23,6 +23,7 @@ import {
 import { scanSpecVulnerabilities } from './spec-scanner';
 import { checkLockFileFreshness } from './lockfile-checker';
 import { hasDependabotConfig } from './dependabot-detector';
+import { getAllEscalations, resolveEscalation } from './escalation-store';
 
 const execAsync = promisify(exec);
 
@@ -543,6 +544,56 @@ export async function scanProject(
 }
 
 /**
+ * Annotate queue items with escalation state from the escalation store.
+ * Auto-resolves escalations when upstream provides a fix (except accepted_risk).
+ * Filters out active accepted_risk items (but keeps expired ones).
+ */
+function annotateWithEscalations(items: PatchQueueItem[]): PatchQueueItem[] {
+  const escalations = getAllEscalations()
+  const now = new Date()
+
+  return items.map(item => {
+    // Find active escalation for this project+package (no resolvedAt)
+    const record = escalations.find(
+      r => r.projectId === item.projectId && r.package === item.package && !r.resolvedAt
+    )
+    if (!record) return item
+
+    // If upstream now provides a fix and this is an override/major escalation,
+    // auto-resolve the escalation so it re-surfaces as a normal patchable item
+    if (item.fixAvailable && record.action !== 'accepted_risk') {
+      resolveEscalation(record.id)
+      return item // re-surface as normal patchable item
+    }
+
+    const base = {
+      ...item,
+      escalationId: record.id,
+      escalationReason: record.reason,
+    }
+
+    if (record.action === 'accepted_risk') {
+      const expired = record.expiresAt ? new Date(record.expiresAt) < now : false
+      return {
+        ...base,
+        escalationStatus: expired ? 'accepted_risk_expired' as const : 'accepted_risk' as const,
+        escalationExpiresAt: record.expiresAt,
+      }
+    }
+
+    if (record.action === 'force_override') {
+      return { ...base, escalationStatus: 'force_override_pending' as const }
+    }
+
+    if (record.action === 'force_major') {
+      return { ...base, escalationStatus: 'force_major_pending' as const }
+    }
+
+    return item
+  })
+}
+
+/**
  * Build priority queue from multiple project caches
  * Creates one entry per project per package (1:1 relationship)
  */
@@ -693,8 +744,9 @@ export function buildPriorityQueue(
 
   // Sort by priority (lower number = higher priority)
   queue.sort((a, b) => a.priority - b.priority);
-
-  return { queue, summary };
+  const annotated = annotateWithEscalations(queue)
+  const filtered = annotated.filter(item => item.escalationStatus !== 'accepted_risk')
+  return { queue: filtered, summary };
 }
 
 /**
