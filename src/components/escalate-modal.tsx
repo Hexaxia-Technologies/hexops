@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -36,6 +36,19 @@ export function EscalateModal({ open, item, projectEscalationConfig, onClose, on
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Reset field state when the modal opens for a new item
+  useEffect(() => {
+    if (!item) return
+    setAction('force_override')
+    setReason('')
+    setOverrideVersion(item.targetVersion ?? '')
+    setTargetVersion(item.targetVersion ?? '')
+    setExpiresAt('')
+    setAutoCommit(projectEscalationConfig?.autoCommit ?? false)
+    setAutoPush(projectEscalationConfig?.autoPush ?? false)
+    setError(null)
+  }, [item?.package, item?.projectId, open])
+
   const maxDays = projectEscalationConfig?.acceptedRiskMaxDays ?? 90
   const maxDate = new Date()
   maxDate.setDate(maxDate.getDate() + maxDays)
@@ -66,7 +79,7 @@ export function EscalateModal({ open, item, projectEscalationConfig, onClose, on
       onSuccess(item)
       onClose()
     } catch (err) {
-      setError(String(err))
+      setError(err instanceof Error ? err.message : String(err))
     } finally {
       setLoading(false)
     }
@@ -116,7 +129,13 @@ export function EscalateModal({ open, item, projectEscalationConfig, onClose, on
                   </div>
                   <div className="flex items-center justify-between">
                     <Label className="text-xs">Auto-commit</Label>
-                    <Switch checked={autoCommit} onCheckedChange={setAutoCommit} />
+                    <Switch
+                      checked={autoCommit}
+                      onCheckedChange={val => {
+                        setAutoCommit(val)
+                        if (!val) setAutoPush(false)
+                      }}
+                    />
                   </div>
                   <div className="flex items-center justify-between">
                     <Label className="text-xs text-muted-foreground">Auto-push (requires auto-commit)</Label>
@@ -221,7 +240,7 @@ export function EscalateModal({ open, item, projectEscalationConfig, onClose, on
             </Button>
             <Button
               size="sm"
-              disabled={!reason.trim() || loading}
+              disabled={!reason.trim() || (action === 'force_override' && !overrideVersion) || loading}
               onClick={() => submit(false)}
             >
               {loading ? 'Working…' : 'Escalate'}
