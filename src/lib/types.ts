@@ -11,6 +11,7 @@ export interface ProjectConfig {
     [key: string]: string;
   };
   holds?: string[];  // Package names on hold (excluded from updates)
+  escalation?: Partial<EscalationConfig>;
   settings?: Partial<ProjectSettings>;  // Per-project settings overrides
   github?: {
     owner: string;
@@ -155,6 +156,33 @@ export interface DependabotConfig {
   error: string | null;
 }
 
+// Escalation Types
+
+export type EscalateAction = 'force_override' | 'force_major' | 'accepted_risk'
+
+export interface EscalationConfig {
+  acceptedRiskMaxDays: number   // default 90
+  autoCommit: boolean           // force_override: commit after patching
+  autoPush: boolean             // force_override: push after committing
+}
+
+export interface EscalateRecord {
+  id: string                    // uuid (crypto.randomUUID())
+  projectId: string
+  package: string
+  action: EscalateAction
+  reason: string
+  createdAt: string             // ISO 8601
+  expiresAt?: string            // accepted_risk only
+  resolvedAt?: string           // set by scanner when upstream patch becomes available
+  overrideVersion?: string      // force_override: version pinned to
+  targetVersion?: string        // force_major: target version
+}
+
+export interface EscalationStore {
+  records: EscalateRecord[]
+}
+
 // Patch Management Types
 
 export type UpdateType = 'patch' | 'minor' | 'major';
@@ -186,6 +214,11 @@ export interface PatchQueueItem {
   cves?: string[];
   url?: string;
   advisoryId?: number;
+  // Escalation state (set by scanner when an EscalateRecord exists for this package)
+  escalationId?: string
+  escalationStatus?: 'accepted_risk' | 'accepted_risk_expired' | 'force_override_pending' | 'force_major_pending'
+  escalationReason?: string
+  escalationExpiresAt?: string
 }
 
 export interface PatchSummary {
