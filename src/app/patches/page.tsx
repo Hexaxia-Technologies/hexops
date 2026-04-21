@@ -6,11 +6,13 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { PatchesSidebar, type UpdateResult, type UpdateStatus } from '@/components/patches-sidebar';
-import { RefreshCw, Shield, Package, ArrowUp, List, FolderTree, ChevronDown, ChevronRight, AlertTriangle, Link as LinkIcon, PauseCircle, PlayCircle, ExternalLink, HelpCircle, Wrench } from 'lucide-react';
+import { RefreshCw, Shield, Package, ArrowUp, List, FolderTree, ChevronDown, ChevronRight, AlertTriangle, Link as LinkIcon, PauseCircle, PlayCircle, ExternalLink, HelpCircle, Wrench, Siren } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import type { PatchQueueItem, PatchSummary } from '@/lib/types';
 import { DependabotPanel } from '@/components/detail-sections/dependabot-panel';
+import { EscalateModal } from '@/components/escalate-modal';
+import { AcceptedRiskPanel } from '@/components/accepted-risk-panel';
 import { generatePatchCommitMessage, type UpdatedPackage } from '@/lib/patch-commit-message';
 import { GitCommit, Upload, Pencil, X } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
@@ -114,6 +116,13 @@ export default function PatchesPage() {
   const eventSourceRef = useRef<EventSource | null>(null);
   const [resolvingProjects, setResolvingProjects] = useState<Set<string>>(new Set());
   const [dependabotMap, setDependabotMap] = useState<Record<string, boolean>>({});
+  const [escalateItem, setEscalateItem] = useState<PatchQueueItem | null>(null);
+  const [escalateModalOpen, setEscalateModalOpen] = useState(false);
+
+  const handleEscalate = useCallback((item: PatchQueueItem) => {
+    setEscalateItem(item);
+    setEscalateModalOpen(true);
+  }, []);
 
   const fetchPatches = useCallback((bustCache = false) => {
     // Close any existing connection
@@ -177,6 +186,12 @@ export default function PatchesPage() {
       eventSourceRef.current = null;
     };
   }, []);
+
+  const handleEscalateSuccess = useCallback((_item: PatchQueueItem) => {
+    setEscalateModalOpen(false);
+    setEscalateItem(null);
+    fetchPatches(true);
+  }, [fetchPatches]);
 
   // Fetch persisted patch history
   const fetchHistory = useCallback(async () => {
@@ -1071,6 +1086,7 @@ export default function PatchesPage() {
                     onToggle={toggleSelection}
                     onHold={handleHold}
                     showProject={true}
+                    onEscalate={handleEscalate}
                   />
                 );
               })}
@@ -1263,6 +1279,35 @@ export default function PatchesPage() {
                           <span className="text-xs text-zinc-500">— manual patching disabled</span>
                         </div>
                         <DependabotPanel projectId={group.projectId} />
+                        {/* Show escalation rows for fixAvailable: false items */}
+                        {group.patches.filter(p => p.fixAvailable === false).map((item) => (
+                          <div key={`${item.projectId}-${item.package}`} className="px-3 py-2 border-t border-orange-500/10">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <SeverityBadge type={item.type} severity={item.severity} />
+                                <span className="font-mono text-sm text-zinc-300">{item.package}</span>
+                                {item.escalationStatus === 'accepted_risk_expired' && (
+                                  <Badge variant="outline" className="text-xs bg-red-500/10 border-red-500/30 text-red-400">Expired</Badge>
+                                )}
+                              </div>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs border-amber-500/30 text-amber-400 hover:bg-amber-500/10 hover:text-amber-300"
+                                onClick={() => handleEscalate(item)}
+                              >
+                                <Siren className="h-3 w-3 mr-1" />
+                                Escalate
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                        {/* Accepted Risk Panel for Dependabot projects */}
+                        <AcceptedRiskPanel
+                          projectId={group.projectId}
+                          items={group.patches}
+                          onReverse={(_item: PatchQueueItem) => fetchPatches(true)}
+                        />
                       </div>
                     ) : (
                       <div className="p-2 space-y-2 bg-zinc-950">
@@ -1279,9 +1324,30 @@ export default function PatchesPage() {
                               onToggle={toggleSelection}
                               onHold={handleHold}
                               showProject={false}
+                              onEscalate={handleEscalate}
                             />
                           );
                         })}
+                        {/* Pending Major Bump banners */}
+                        {group.patches.filter(p => p.escalationStatus === 'force_major_pending').map(item => (
+                          <div key={`major-banner-${item.package}`} className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-sm">
+                              <AlertTriangle className="h-4 w-4 text-amber-400" />
+                              <span className="text-amber-300 font-medium">Pending Major Bump:</span>
+                              <span className="font-mono text-zinc-300">{item.package}</span>
+                              {item.currentVersion && item.targetVersion && (
+                                <span className="text-zinc-500 text-xs">{item.currentVersion} → {item.targetVersion}</span>
+                              )}
+                            </div>
+                            <span className="text-xs text-zinc-500">Manual review required before commit</span>
+                          </div>
+                        ))}
+                        {/* Accepted Risk Panel */}
+                        <AcceptedRiskPanel
+                          projectId={group.projectId}
+                          items={group.patches}
+                          onReverse={(_item: PatchQueueItem) => fetchPatches(true)}
+                        />
                       </div>
                     )
                   )}
@@ -1298,6 +1364,15 @@ export default function PatchesPage() {
         updateStatus={updateStatus}
         recentUpdates={recentUpdates}
       />
+
+      {escalateItem && (
+        <EscalateModal
+          item={escalateItem}
+          open={escalateModalOpen}
+          onClose={() => { setEscalateModalOpen(false); setEscalateItem(null); }}
+          onSuccess={handleEscalateSuccess}
+        />
+      )}
     </>
   );
 }
@@ -1309,9 +1384,10 @@ interface PatchRowProps {
   onToggle: (key: string) => void;
   onHold: (projectId: string, packageName: string, hold: boolean) => void;
   showProject: boolean;
+  onEscalate?: (item: PatchQueueItem) => void;
 }
 
-function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject }: PatchRowProps) {
+function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject, onEscalate }: PatchRowProps) {
   const [showDetails, setShowDetails] = useState(false);
   const isTransitive = item.isDirect === false;
   const isHeld = item.isHeld === true;
@@ -1391,6 +1467,17 @@ function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject }: 
                 {item.cves.length} CVE{item.cves.length !== 1 ? 's' : ''}
               </Badge>
             )}
+            {item.escalationStatus === 'force_override_pending' && (
+              <Badge variant="outline" className="text-xs bg-amber-500/10 border-amber-500/30 text-amber-400">
+                <Siren className="h-3 w-3 mr-1" />
+                Escalated
+              </Badge>
+            )}
+            {item.escalationStatus === 'accepted_risk_expired' && (
+              <Badge variant="outline" className="text-xs bg-red-500/10 border-red-500/30 text-red-400">
+                Expired
+              </Badge>
+            )}
           </div>
           {item.title && (
             <p className="text-sm text-zinc-500 truncate mt-1">{item.title}</p>
@@ -1441,6 +1528,19 @@ function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject }: 
         >
           <HelpCircle className="h-4 w-4" />
         </Button>
+
+        {/* Escalate button — shown for fixAvailable: false items */}
+        {item.fixAvailable === false && !isHeld && onEscalate && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={(e) => { e.stopPropagation(); onEscalate(item); }}
+            className="h-8 px-2 text-amber-500 hover:text-amber-300 hover:bg-amber-500/10"
+            title="Escalate this vulnerability"
+          >
+            <Siren className="h-4 w-4" />
+          </Button>
+        )}
 
         {/* Hold/Unhold button */}
         <Button
