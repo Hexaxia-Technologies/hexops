@@ -1,6 +1,6 @@
 import fs from 'fs'
 import path from 'path'
-import type { EscalateRecord, EscalationStore } from './types'
+import type { EscalateRecord, EscalationConfig, EscalationStore } from './types'
 
 const ESCALATIONS_PATH = path.join(process.cwd(), '.hexops', 'patches', 'escalations.json')
 
@@ -16,8 +16,12 @@ function readStore(): EscalationStore {
 }
 
 function writeStore(store: EscalationStore): void {
-  fs.mkdirSync(path.dirname(ESCALATIONS_PATH), { recursive: true })
-  fs.writeFileSync(ESCALATIONS_PATH, JSON.stringify(store, null, 2))
+  try {
+    fs.mkdirSync(path.dirname(ESCALATIONS_PATH), { recursive: true })
+    fs.writeFileSync(ESCALATIONS_PATH, JSON.stringify(store, null, 2))
+  } catch {
+    // Ignore write errors — store remains at last good state
+  }
 }
 
 export function getAllEscalations(): EscalateRecord[] {
@@ -56,11 +60,9 @@ export function resolveEscalation(id: string): void {
   }
 }
 
-export function getEscalationConfig(projectConfig: { escalation?: { acceptedRiskMaxDays?: number; autoCommit?: boolean; autoPush?: boolean } }): {
-  acceptedRiskMaxDays: number
-  autoCommit: boolean
-  autoPush: boolean
-} {
+export function getEscalationConfig(
+  projectConfig: { escalation?: Partial<EscalationConfig> }
+): EscalationConfig {
   return {
     acceptedRiskMaxDays: projectConfig.escalation?.acceptedRiskMaxDays ?? 90,
     autoCommit: projectConfig.escalation?.autoCommit ?? false,
