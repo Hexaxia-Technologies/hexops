@@ -1,10 +1,11 @@
-/**
- * Application version - update this when releasing new versions
- * Also update: package.json, docs/dev-notes.md
- */
-export const APP_VERSION = '0.9.0';
+import pkg from '../../package.json';
 
 /**
- * Build metadata (can be set by CI/CD)
+ * Application version — sourced from package.json to stay in sync automatically.
  */
-export const BUILD_DATE = '2026-01-29';
+export const APP_VERSION: string = pkg.version;
+
+/**
+ * Build date — set at startup.
+ */
+export const BUILD_DATE: string = new Date().toISOString().split('T')[0];

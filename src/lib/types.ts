@@ -1,3 +1,30 @@
+// Escalation Types
+
+export type EscalateAction = 'force_override' | 'force_major' | 'accepted_risk';
+
+export interface EscalationConfig {
+  acceptedRiskMaxDays: number;   // default 90
+  autoCommit: boolean;           // force_override: commit after patching
+  autoPush: boolean;             // force_override: push after committing
+}
+
+export interface EscalateRecord {
+  id: string;                    // uuid (crypto.randomUUID())
+  projectId: string;
+  package: string;
+  action: EscalateAction;
+  reason: string;
+  createdAt: string;             // ISO 8601
+  expiresAt?: string;            // accepted_risk only
+  resolvedAt?: string;           // set by scanner when upstream patch becomes available
+  overrideVersion?: string;      // force_override: version pinned to
+  targetVersion?: string;        // force_major: target version
+}
+
+export interface EscalationStore {
+  records: EscalateRecord[];
+}
+
 export interface ProjectConfig {
   id: string;
   name: string;
@@ -11,7 +38,13 @@ export interface ProjectConfig {
     [key: string]: string;
   };
   holds?: string[];  // Package names on hold (excluded from updates)
+  escalation?: Partial<EscalationConfig>;
   settings?: Partial<ProjectSettings>;  // Per-project settings overrides
+  github?: {
+    owner: string;
+    repo: string;
+  };
+  propagation?: Partial<PropagationConfig>;
 }
 
 export interface ProjectExtendedStatus {
@@ -54,6 +87,9 @@ export interface GlobalSettings {
       defaultBranch: string;
       commitPrefix: string;
       pushAfterCommit: boolean;
+    };
+    github: {
+      token: string | null;
     };
   };
   patching: {
@@ -123,6 +159,44 @@ export interface LockfileResolutionResult {
   error?: string;
 }
 
+// Dependabot Types
+
+export interface DependabotPR {
+  number: number;
+  title: string;
+  url: string;
+  state: 'open' | 'closed' | 'merged';
+  mergeable: boolean | null;
+  draft: boolean;
+  createdAt: string;
+  updatedAt: string;
+  labels: string[];
+  updateType: 'version-update:semver-patch' | 'version-update:semver-minor' | 'version-update:semver-major' | string;
+  dependencyGroup: string | null;
+}
+
+export interface DependabotConfig {
+  managed: boolean;
+  owner: string | null;
+  repo: string | null;
+  prs: DependabotPR[];
+  fetchedAt: string | null;
+  error: string | null;
+}
+
+export interface BranchSyncStatus {
+  branch: string;
+  status: 'synced' | 'out_of_sync' | 'conflict' | 'propagated';
+  prUrl?: string;
+  error?: string;
+}
+
+export interface PropagationConfig {
+  activeBranchDays: number;
+  openPR: boolean;
+  autoPush: boolean;
+}
+
 // Patch Management Types
 
 export type UpdateType = 'patch' | 'minor' | 'major';
@@ -154,6 +228,11 @@ export interface PatchQueueItem {
   cves?: string[];
   url?: string;
   advisoryId?: number;
+  // Escalation state (set by scanner when an EscalateRecord exists for this package)
+  escalationId?: string;
+  escalationStatus?: 'accepted_risk' | 'accepted_risk_expired' | 'force_override_pending' | 'force_major_pending';
+  escalationReason?: string;
+  escalationExpiresAt?: string;
 }
 
 export interface PatchSummary {
@@ -206,6 +285,7 @@ export interface OutdatedPackage {
   wanted: string;
   latest: string;
   type: 'dependencies' | 'devDependencies';
+  dependabotManaged?: boolean;
 }
 
 export interface VulnerabilityInfo {
@@ -228,6 +308,7 @@ export interface VulnerabilityInfo {
   cves?: string[];              // CVE identifiers (e.g., ["CVE-2024-12345"])
   url?: string;                 // Link to advisory (GitHub/npm)
   advisoryId?: number;          // npm advisory ID
+  dependabotManaged?: boolean;
 }
 
 export interface ProjectPatchCache {

@@ -6,10 +6,13 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { PatchesSidebar, type UpdateResult, type UpdateStatus } from '@/components/patches-sidebar';
-import { RefreshCw, Shield, Package, ArrowUp, List, FolderTree, ChevronDown, ChevronRight, AlertTriangle, Link as LinkIcon, PauseCircle, PlayCircle, ExternalLink, HelpCircle, Wrench } from 'lucide-react';
+import { RefreshCw, Shield, Package, ArrowUp, List, FolderTree, ChevronDown, ChevronRight, AlertTriangle, Link as LinkIcon, PauseCircle, PlayCircle, ExternalLink, HelpCircle, Wrench, Siren } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import type { PatchQueueItem, PatchSummary } from '@/lib/types';
+import { DependabotPanel } from '@/components/detail-sections/dependabot-panel';
+import { EscalateModal } from '@/components/escalate-modal';
+import { AcceptedRiskPanel } from '@/components/accepted-risk-panel';
 import { generatePatchCommitMessage, type UpdatedPackage } from '@/lib/patch-commit-message';
 import { GitCommit, Upload, Pencil, X } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
@@ -112,6 +115,14 @@ export default function PatchesPage() {
   const [scanProgress, setScanProgress] = useState<{ scanned: number; total: number; currentProject: string } | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const [resolvingProjects, setResolvingProjects] = useState<Set<string>>(new Set());
+  const [dependabotMap, setDependabotMap] = useState<Record<string, boolean>>({});
+  const [escalateItem, setEscalateItem] = useState<PatchQueueItem | null>(null);
+  const [escalateModalOpen, setEscalateModalOpen] = useState(false);
+
+  const handleEscalate = useCallback((item: PatchQueueItem) => {
+    setEscalateItem(item);
+    setEscalateModalOpen(true);
+  }, []);
 
   const fetchPatches = useCallback((bustCache = false) => {
     // Close any existing connection
@@ -175,6 +186,12 @@ export default function PatchesPage() {
       eventSourceRef.current = null;
     };
   }, []);
+
+  const handleEscalateSuccess = useCallback(() => {
+    setEscalateModalOpen(false);
+    setEscalateItem(null);
+    fetchPatches(true);
+  }, [fetchPatches]);
 
   // Fetch persisted patch history
   const fetchHistory = useCallback(async () => {
@@ -289,6 +306,23 @@ export default function PatchesPage() {
 
     fetchAllGitStatuses();
   }, [data, fetchProjectGitStatus]);
+
+  // Fetch dependabot status for all projects once data loads
+  useEffect(() => {
+    if (!data) return;
+    const projectIds = Object.keys(data.projectNames);
+    if (!projectIds.length) return;
+    Promise.all(
+      projectIds.map((id) =>
+        fetch(`/api/projects/${id}/dependabot`)
+          .then((r) => r.json())
+          .then((result) => [id, result.managed] as const)
+          .catch(() => [id, false] as const)
+      )
+    ).then((results) => {
+      setDependabotMap(Object.fromEntries(results));
+    });
+  }, [data]);
 
   // Set pending commit for a project after updates
   const setPendingCommit = useCallback((
@@ -1052,6 +1086,7 @@ export default function PatchesPage() {
                     onToggle={toggleSelection}
                     onHold={handleHold}
                     showProject={true}
+                    onEscalate={handleEscalate}
                   />
                 );
               })}
@@ -1068,9 +1103,9 @@ export default function PatchesPage() {
                     <div className="flex items-center gap-3 flex-1">
                       <button
                         className="flex items-center gap-3"
-                        onClick={() => group.patches.length > 0 && toggleProjectExpanded(group.projectId)}
+                        onClick={() => (group.patches.length > 0 || dependabotMap[group.projectId]) && toggleProjectExpanded(group.projectId)}
                       >
-                        {group.patches.length > 0 ? (
+                        {group.patches.length > 0 || dependabotMap[group.projectId] ? (
                           expandedProjects.has(group.projectId) ? (
                             <ChevronDown className="h-4 w-4 text-zinc-500" />
                           ) : (
@@ -1088,7 +1123,11 @@ export default function PatchesPage() {
                         >
                           <ExternalLink className="h-3.5 w-3.5" />
                         </Link>
-                        {group.patches.length > 0 ? (
+                        {dependabotMap[group.projectId] ? (
+                          <Badge variant="outline" className="text-xs border-orange-500/30 text-orange-400 bg-orange-500/10">
+                            Dependabot
+                          </Badge>
+                        ) : group.patches.length > 0 ? (
                           <Badge variant="outline" className="text-xs border-zinc-700 text-zinc-500">
                             {group.patches.length} update{group.patches.length !== 1 ? 's' : ''}
                           </Badge>
@@ -1098,8 +1137,8 @@ export default function PatchesPage() {
                           </Badge>
                         )}
                       </button>
-                      {/* Select All / Deselect All - only show when there are patches */}
-                      {group.patches.length > 0 && (
+                      {/* Select All / Deselect All - only show when there are patches and not Dependabot-managed */}
+                      {group.patches.length > 0 && !dependabotMap[group.projectId] && (
                         <Button
                           variant="ghost"
                           size="sm"
@@ -1237,24 +1276,96 @@ export default function PatchesPage() {
 
                   {/* Project Patches */}
                   {expandedProjects.has(group.projectId) && (
-                    <div className="p-2 space-y-2 bg-zinc-950">
-                      {group.patches.map((item) => {
-                        const key = getItemKey(item);
-                        const isSelected = selectedPackages.has(key);
+                    dependabotMap[group.projectId] ? (
+                      <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-1 m-2">
+                        <div className="flex items-center gap-2 px-3 py-2 border-b border-orange-500/10">
+                          <span className="text-xs font-medium text-orange-400">Dependabot Managed</span>
+                          <span className="text-xs text-zinc-500">— manual patching disabled</span>
+                        </div>
+                        <DependabotPanel projectId={group.projectId} />
+                        {/* Show escalation rows for fixAvailable: false items */}
+                        {group.patches.filter(p => p.fixAvailable === false).map((item) => (
+                          <div key={getItemKey(item)} className="px-3 py-2 border-t border-orange-500/10">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <SeverityBadge type={item.type} severity={item.severity} />
+                                <span className="font-mono text-sm text-zinc-300">{item.package}</span>
+                                {item.escalationStatus === 'accepted_risk_expired' && (
+                                  <Badge variant="outline" className="text-xs bg-red-500/10 border-red-500/30 text-red-400">Expired</Badge>
+                                )}
+                              </div>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs border-amber-500/30 text-amber-400 hover:bg-amber-500/10 hover:text-amber-300"
+                                onClick={() => handleEscalate(item)}
+                              >
+                                <Siren className="h-3 w-3 mr-1" />
+                                Escalate
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                        {/* Accepted Risk Panel for Dependabot projects */}
+                        <AcceptedRiskPanel
+                          projectId={group.projectId}
+                          items={group.patches.filter(p =>
+                            p.escalationStatus === 'accepted_risk' ||
+                            p.escalationStatus === 'accepted_risk_expired'
+                          )}
+                          onReverse={(_item: PatchQueueItem) => fetchPatches(true)}
+                        />
+                      </div>
+                    ) : (
+                      <div className="p-2 space-y-2 bg-zinc-950">
+                        {group.patches.map((item) => {
+                          const key = getItemKey(item);
+                          const isSelected = selectedPackages.has(key);
 
-                        return (
-                          <PatchRow
-                            key={key}
-                            item={item}
-                            itemKey={key}
-                            isSelected={isSelected}
-                            onToggle={toggleSelection}
-                            onHold={handleHold}
-                            showProject={false}
-                          />
-                        );
-                      })}
-                    </div>
+                          return (
+                            <PatchRow
+                              key={key}
+                              item={item}
+                              itemKey={key}
+                              isSelected={isSelected}
+                              onToggle={toggleSelection}
+                              onHold={handleHold}
+                              showProject={false}
+                              onEscalate={handleEscalate}
+                            />
+                          );
+                        })}
+                        {/* Pending Major Bump banners */}
+                        {group.patches.filter(p => p.escalationStatus === 'force_major_pending').map(item => (
+                          <div key={`major-banner-${getItemKey(item)}`} className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-sm">
+                              <AlertTriangle className="h-4 w-4 text-amber-400" />
+                              <span className="text-amber-300 font-medium">Pending Major Bump:</span>
+                              <span className="font-mono text-zinc-300">{item.package}</span>
+                              {item.currentVersion && item.targetVersion && (
+                                <span className="text-zinc-500 text-xs">{item.currentVersion} → {item.targetVersion}</span>
+                              )}
+                            </div>
+                            <Link
+                              href={`/projects/${group.projectId}`}
+                              className="text-xs text-amber-400 hover:text-amber-300 underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              Review & Commit →
+                            </Link>
+                          </div>
+                        ))}
+                        {/* Accepted Risk Panel */}
+                        <AcceptedRiskPanel
+                          projectId={group.projectId}
+                          items={group.patches.filter(p =>
+                            p.escalationStatus === 'accepted_risk' ||
+                            p.escalationStatus === 'accepted_risk_expired'
+                          )}
+                          onReverse={(_item: PatchQueueItem) => fetchPatches(true)}
+                        />
+                      </div>
+                    )
                   )}
                 </div>
               );
@@ -1269,6 +1380,15 @@ export default function PatchesPage() {
         updateStatus={updateStatus}
         recentUpdates={recentUpdates}
       />
+
+      {escalateItem && (
+        <EscalateModal
+          item={escalateItem}
+          open={escalateModalOpen}
+          onClose={() => { setEscalateModalOpen(false); setEscalateItem(null); }}
+          onSuccess={handleEscalateSuccess}
+        />
+      )}
     </>
   );
 }
@@ -1280,9 +1400,10 @@ interface PatchRowProps {
   onToggle: (key: string) => void;
   onHold: (projectId: string, packageName: string, hold: boolean) => void;
   showProject: boolean;
+  onEscalate?: (item: PatchQueueItem) => void;
 }
 
-function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject }: PatchRowProps) {
+function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject, onEscalate }: PatchRowProps) {
   const [showDetails, setShowDetails] = useState(false);
   const isTransitive = item.isDirect === false;
   const isHeld = item.isHeld === true;
@@ -1362,6 +1483,17 @@ function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject }: 
                 {item.cves.length} CVE{item.cves.length !== 1 ? 's' : ''}
               </Badge>
             )}
+            {item.escalationStatus === 'force_override_pending' && (
+              <Badge variant="outline" className="text-xs bg-amber-500/10 border-amber-500/30 text-amber-400">
+                <Siren className="h-3 w-3 mr-1" />
+                Escalated
+              </Badge>
+            )}
+            {item.escalationStatus === 'accepted_risk_expired' && (
+              <Badge variant="outline" className="text-xs bg-red-500/10 border-red-500/30 text-red-400">
+                Expired
+              </Badge>
+            )}
           </div>
           {item.title && (
             <p className="text-sm text-zinc-500 truncate mt-1">{item.title}</p>
@@ -1412,6 +1544,19 @@ function PatchRow({ item, itemKey, isSelected, onToggle, onHold, showProject }: 
         >
           <HelpCircle className="h-4 w-4" />
         </Button>
+
+        {/* Escalate button — shown for fixAvailable: false items */}
+        {item.fixAvailable === false && !isHeld && onEscalate && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={(e) => { e.stopPropagation(); onEscalate(item); }}
+            className="h-8 px-2 text-amber-500 hover:text-amber-300 hover:bg-amber-500/10"
+            title="Escalate this vulnerability"
+          >
+            <Siren className="h-4 w-4" />
+          </Button>
+        )}
 
         {/* Hold/Unhold button */}
         <Button

@@ -1,11 +1,15 @@
 # HexOps Development Notes
 
-**Current Version:** 0.10.2
+**Current Version:** 0.12.0
 **Purpose:** Internal development operations dashboard for managing Hexaxia project dev servers. Start/stop projects, view logs, manage patches, and monitor status from a single interface.
 
 ---
 
 ## Version History
+
+### v0.12.0 (2026-04-17)
+- **Feature:** Dependabot integration — projects managed by Dependabot switch to read-only monitor mode in the Patches dashboard, showing open PRs with merge/conflict status and direct GitHub links
+- **Fix:** App version now sourced from package.json automatically — no more manual sync required
 
 ### v0.10.2 (2026-03-21)
 - **Feature:** Progressive loading with SSE for patches dashboard

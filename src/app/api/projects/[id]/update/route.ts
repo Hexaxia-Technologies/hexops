@@ -496,8 +496,9 @@ export async function POST(
               const pkgJsonPath = join(cwd, 'node_modules', pkg.name, 'package.json');
               if (existsSync(pkgJsonPath)) {
                 const installed = JSON.parse(readFileSync(pkgJsonPath, 'utf-8'));
-                if (installed.version === pkg.fromVersion) {
-                  // Version didn't change — install silently failed
+                const isFloatingTarget = /^(latest|next|canary)$/.test(pkg.targetVersion);
+                if (installed.version === pkg.fromVersion && !isFloatingTarget) {
+                  // Version didn't change and we had a pinned target — install silently failed
                   verified = false;
                   logger.warn('patches', 'version_unchanged', `${pkg.name} still at ${installed.version} after install`, {
                     projectId: id,
