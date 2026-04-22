@@ -2,6 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import type { DependabotConfig, DependabotPR } from '@/lib/types';
+import { BranchPropagateModal } from '@/components/branch-propagate-modal';
+import { AlertTriangle, GitBranch } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import type { BranchSyncStatus } from '@/lib/types';
 
 interface DependabotPanelProps {
   projectId: string;
@@ -10,6 +14,8 @@ interface DependabotPanelProps {
 export function DependabotPanel({ projectId }: DependabotPanelProps) {
   const [config, setConfig] = useState<DependabotConfig | null>(null);
   const [loading, setLoading] = useState(true);
+  const [outOfSyncBranches, setOutOfSyncBranches] = useState<string[]>([]);
+  const [propagateOpen, setPropagateOpen] = useState(false);
 
   useEffect(() => {
     fetch(`/api/projects/${projectId}/dependabot`)
@@ -19,6 +25,18 @@ export function DependabotPanel({ projectId }: DependabotPanelProps) {
         setLoading(false);
       })
       .catch(() => setLoading(false));
+  }, [projectId]);
+
+  useEffect(() => {
+    fetch(`/api/projects/${projectId}/branch-sync`)
+      .then((r) => r.json())
+      .then((data: { branches?: BranchSyncStatus[] }) => {
+        const oosNames = (data.branches ?? [])
+          .filter((b) => b.status === 'out_of_sync')
+          .map((b) => b.branch);
+        setOutOfSyncBranches(oosNames);
+      })
+      .catch(() => {});
   }, [projectId]);
 
   if (loading) {
@@ -50,6 +68,27 @@ export function DependabotPanel({ projectId }: DependabotPanelProps) {
         </a>
       </div>
 
+      {outOfSyncBranches.length > 0 && (
+        <div className="rounded-md bg-amber-500/10 border border-amber-500/20 px-3 py-2 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-xs text-amber-400">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              <strong>{outOfSyncBranches.length}</strong> branch{outOfSyncBranches.length !== 1 ? 'es' : ''} out of sync with main
+              <span className="text-amber-500/70 ml-1">— {outOfSyncBranches.join(', ')}</span>
+            </span>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs text-amber-400 hover:text-amber-300 hover:bg-amber-500/10 shrink-0"
+            onClick={() => setPropagateOpen(true)}
+          >
+            <GitBranch className="h-3 w-3 mr-1" />
+            Propagate →
+          </Button>
+        </div>
+      )}
+
       {config.error && (
         <div className="rounded-md bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs text-red-400">
           {config.error}
@@ -78,6 +117,11 @@ export function DependabotPanel({ projectId }: DependabotPanelProps) {
           Last fetched: {new Date(config.fetchedAt).toLocaleTimeString()}
         </p>
       )}
+      <BranchPropagateModal
+        projectId={projectId}
+        open={propagateOpen}
+        onClose={() => setPropagateOpen(false)}
+      />
     </div>
   );
 }
