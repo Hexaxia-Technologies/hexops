@@ -1103,9 +1103,9 @@ export default function PatchesPage() {
                     <div className="flex items-center gap-3 flex-1">
                       <button
                         className="flex items-center gap-3"
-                        onClick={() => group.patches.length > 0 && toggleProjectExpanded(group.projectId)}
+                        onClick={() => (group.patches.length > 0 || dependabotMap[group.projectId]) && toggleProjectExpanded(group.projectId)}
                       >
-                        {group.patches.length > 0 ? (
+                        {group.patches.length > 0 || dependabotMap[group.projectId] ? (
                           expandedProjects.has(group.projectId) ? (
                             <ChevronDown className="h-4 w-4 text-zinc-500" />
                           ) : (
@@ -1123,7 +1123,11 @@ export default function PatchesPage() {
                         >
                           <ExternalLink className="h-3.5 w-3.5" />
                         </Link>
-                        {group.patches.length > 0 ? (
+                        {dependabotMap[group.projectId] ? (
+                          <Badge variant="outline" className="text-xs border-orange-500/30 text-orange-400 bg-orange-500/10">
+                            Dependabot
+                          </Badge>
+                        ) : group.patches.length > 0 ? (
                           <Badge variant="outline" className="text-xs border-zinc-700 text-zinc-500">
                             {group.patches.length} update{group.patches.length !== 1 ? 's' : ''}
                           </Badge>
@@ -1133,8 +1137,8 @@ export default function PatchesPage() {
                           </Badge>
                         )}
                       </button>
-                      {/* Select All / Deselect All - only show when there are patches */}
-                      {group.patches.length > 0 && (
+                      {/* Select All / Deselect All - only show when there are patches and not Dependabot-managed */}
+                      {group.patches.length > 0 && !dependabotMap[group.projectId] && (
                         <Button
                           variant="ghost"
                           size="sm"
