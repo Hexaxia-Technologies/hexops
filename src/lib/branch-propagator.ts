@@ -168,7 +168,7 @@ export async function propagateBranch(
     // Check if anything actually changed
     const { stdout: diffOut } = await execFileAsync(
       'git',
-      ['diff', '--name-only'],
+      ['diff', '--cached', '--name-only'],
       { cwd: worktreePath }
     );
     if (!diffOut.trim()) {
