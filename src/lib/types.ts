@@ -44,6 +44,7 @@ export interface ProjectConfig {
     owner: string;
     repo: string;
   };
+  propagation?: Partial<PropagationConfig>;
 }
 
 export interface ProjectExtendedStatus {
@@ -181,6 +182,19 @@ export interface DependabotConfig {
   prs: DependabotPR[];
   fetchedAt: string | null;
   error: string | null;
+}
+
+export interface BranchSyncStatus {
+  branch: string;
+  status: 'synced' | 'out_of_sync' | 'conflict' | 'propagated';
+  prUrl?: string;
+  error?: string;
+}
+
+export interface PropagationConfig {
+  activeBranchDays: number;
+  openPR: boolean;
+  autoPush: boolean;
 }
 
 // Patch Management Types
