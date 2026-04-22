@@ -74,3 +74,45 @@ function mapPR(pr: GitHubPR): DependabotPR {
     dependencyGroup,
   };
 }
+
+/**
+ * Opens a PR on GitHub from `head` branch targeting `base` branch.
+ * Returns the PR's html_url.
+ * Throws if token is missing or API call fails.
+ */
+export async function openPropagationPR(
+  owner: string,
+  repo: string,
+  head: string,
+  base: string,
+  token: string | null
+): Promise<string> {
+  if (!token) throw new Error('GitHub token required to open PRs');
+
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+  };
+
+  const url = `${GITHUB_API}/repos/${owner}/${repo}/pulls`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      title: `chore: sync package.json deps from main → ${base}`,
+      head,
+      base,
+      body: 'Automated branch propagation by HexOps. Syncs `package.json` deps from `main` and regenerates the lockfile.\n\nReview the diff and merge when ready.',
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`GitHub PR creation failed (${response.status}): ${text}`);
+  }
+
+  const pr = (await response.json()) as { html_url: string };
+  return pr.html_url;
+}
