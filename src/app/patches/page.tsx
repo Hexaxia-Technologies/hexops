@@ -1124,9 +1124,16 @@ export default function PatchesPage() {
                           <ExternalLink className="h-3.5 w-3.5" />
                         </Link>
                         {dependabotMap[group.projectId] ? (
-                          <Badge variant="outline" className="text-xs border-orange-500/30 text-orange-400 bg-orange-500/10">
-                            Dependabot
-                          </Badge>
+                          <div className="flex items-center gap-1.5">
+                            <Badge variant="outline" className="text-xs border-orange-500/30 text-orange-400 bg-orange-500/10">
+                              Dependabot
+                            </Badge>
+                            {group.patches.filter(p => p.type === 'vulnerability' && p.fixAvailable !== false && (p.fixViaOverride || p.isDirect)).length > 0 && (
+                              <Badge variant="outline" className="text-xs border-red-500/30 text-red-400 bg-red-500/10">
+                                {group.patches.filter(p => p.type === 'vulnerability' && p.fixAvailable !== false && (p.fixViaOverride || p.isDirect)).length} CVE{group.patches.filter(p => p.type === 'vulnerability' && p.fixAvailable !== false && (p.fixViaOverride || p.isDirect)).length !== 1 ? 's' : ''} urgent
+                              </Badge>
+                            )}
+                          </div>
                         ) : group.patches.length > 0 ? (
                           <Badge variant="outline" className="text-xs border-zinc-700 text-zinc-500">
                             {group.patches.length} update{group.patches.length !== 1 ? 's' : ''}
@@ -1137,8 +1144,8 @@ export default function PatchesPage() {
                           </Badge>
                         )}
                       </button>
-                      {/* Select All / Deselect All - only show when there are patches and not Dependabot-managed */}
-                      {group.patches.length > 0 && !dependabotMap[group.projectId] && (
+                      {/* Select All / Deselect All - show for non-Dependabot projects, or Dependabot projects with urgent CVEs */}
+                      {group.patches.length > 0 && (!dependabotMap[group.projectId] || group.patches.some(p => p.type === 'vulnerability' && p.fixAvailable !== false && (p.fixViaOverride || p.isDirect))) && (
                         <Button
                           variant="ghost"
                           size="sm"
@@ -1280,9 +1287,34 @@ export default function PatchesPage() {
                       <div className="rounded-lg border border-orange-500/20 bg-orange-500/5 p-1 m-2">
                         <div className="flex items-center gap-2 px-3 py-2 border-b border-orange-500/10">
                           <span className="text-xs font-medium text-orange-400">Dependabot Managed</span>
-                          <span className="text-xs text-zinc-500">— manual patching disabled</span>
+                          <span className="text-xs text-zinc-500">— routine updates deferred to Dependabot</span>
                         </div>
                         <DependabotPanel projectId={group.projectId} />
+                        {/* CVEs requiring immediate action — Dependabot can't fix these on its schedule */}
+                        {group.patches.filter(p => p.type === 'vulnerability' && p.fixAvailable !== false && (p.fixViaOverride || p.isDirect)).length > 0 && (
+                          <div className="border-t border-red-500/20">
+                            <div className="flex items-center gap-2 px-3 py-2 bg-red-500/5">
+                              <span className="text-xs font-medium text-red-400">CVEs requiring immediate action</span>
+                              <span className="text-xs text-zinc-500">— {group.patches.some(p => p.fixViaOverride) ? 'Dependabot cannot fix transitive overrides' : 'patch now without waiting for Monday'}</span>
+                            </div>
+                            {group.patches.filter(p => p.type === 'vulnerability' && p.fixAvailable !== false && (p.fixViaOverride || p.isDirect)).map((item) => {
+                              const key = getItemKey(item);
+                              const isSelected = selectedPackages.has(key);
+                              return (
+                                <PatchRow
+                                  key={key}
+                                  item={item}
+                                  itemKey={key}
+                                  isSelected={isSelected}
+                                  onToggle={toggleSelection}
+                                  onHold={handleHold}
+                                  showProject={false}
+                                  onEscalate={handleEscalate}
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
                         {/* Show escalation rows for fixAvailable: false items */}
                         {group.patches.filter(p => p.fixAvailable === false).map((item) => (
                           <div key={getItemKey(item)} className="px-3 py-2 border-t border-orange-500/10">
