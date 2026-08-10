@@ -34,17 +34,6 @@ export function _namespacesCollide(a: string, b: string): boolean {
 	return longer.startsWith(shorter + SEPARATOR);
 }
 
-// Fail fast (at import time) if the registry itself is unsafe.
-for (let i = 0; i < REGISTERED_NAMESPACES.length; i++) {
-	for (let j = i + 1; j < REGISTERED_NAMESPACES.length; j++) {
-		if (_namespacesCollide(REGISTERED_NAMESPACES[i], REGISTERED_NAMESPACES[j])) {
-			throw new Error(
-				`json-cache: registered namespaces "${REGISTERED_NAMESPACES[i]}" and "${REGISTERED_NAMESPACES[j]}" can collide via the separator`,
-			);
-		}
-	}
-}
-
 function assertRegisteredNamespace(namespace: string): void {
 	if (!(REGISTERED_NAMESPACES as readonly string[]).includes(namespace)) {
 		throw new Error(
