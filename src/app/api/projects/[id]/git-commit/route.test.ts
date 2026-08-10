@@ -240,6 +240,76 @@ describe('POST /api/projects/[id]/git-commit', () => {
     });
   });
 
+  describe('scope: "dependencies"', () => {
+    it('stages package.json + the detected lockfile and nothing else', async () => {
+      // Only package.json and pnpm-lock.yaml exist on disk; the other known
+      // lockfiles (package-lock.json, yarn.lock, bun.lockb) do not.
+      vi.mocked(existsSync).mockImplementation(
+        (p) =>
+          String(p).endsWith('package.json') || String(p).endsWith('pnpm-lock.yaml')
+      );
+      scriptGit({
+        add: async () => OK,
+        diff: async () => {
+          throw gitError(1);
+        },
+        commit: async () => ({ stdout: 'commit ok', stderr: '' }),
+      });
+
+      const res = await POST(
+        makeRequest({ message: 'chore: bump deps', scope: 'dependencies' }),
+        makeParams()
+      );
+      const data = await res.json();
+
+      expect(data.success).toBe(true);
+      expect(mockExecFileAsync).toHaveBeenCalledWith(
+        'git',
+        ['add', '--', 'package.json', 'pnpm-lock.yaml'],
+        expect.objectContaining({ cwd: PROJECT.path })
+      );
+    });
+
+    it('400s when both `files` and `scope` are sent', async () => {
+      const res = await POST(
+        makeRequest({ message: 'x', files: ['package.json'], scope: 'dependencies' }),
+        makeParams()
+      );
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toMatch(/mutually exclusive/i);
+      expect(mockExecFileAsync).not.toHaveBeenCalled();
+    });
+
+    it('400s on an unknown scope value', async () => {
+      const res = await POST(
+        makeRequest({ message: 'x', scope: 'everything' }),
+        makeParams()
+      );
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toMatch(/scope/i);
+      expect(mockExecFileAsync).not.toHaveBeenCalled();
+    });
+
+    it('400s naming the problem when there is no package.json to resolve `dependencies` scope from', async () => {
+      vi.mocked(existsSync).mockReturnValue(false);
+
+      const res = await POST(
+        makeRequest({ message: 'x', scope: 'dependencies' }),
+        makeParams()
+      );
+      expect(res.status).toBe(400);
+      const data = await res.json();
+      expect(data.error).toMatch(/package\.json/i);
+      expect(mockExecFileAsync).not.toHaveBeenCalledWith(
+        'git',
+        expect.arrayContaining(['add']),
+        expect.anything()
+      );
+    });
+  });
+
   describe('nothing to commit', () => {
     it('returns success:false without committing when nothing is staged', async () => {
       scriptGit({

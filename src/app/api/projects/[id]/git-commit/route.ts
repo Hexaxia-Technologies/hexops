@@ -5,6 +5,7 @@ import { promisify } from 'util';
 import { logger } from '@/lib/logger';
 import { existsSync } from 'fs';
 import { isAbsolute, join, relative } from 'path';
+import { LOCKFILES } from '@/lib/patch-storage';
 
 const execFileAsync = promisify(execFile);
 
@@ -52,6 +53,37 @@ async function isStageable(cwd: string, relPath: string): Promise<boolean> {
   }
 }
 
+/** Scope values `scope` may take. Resolution is server-side and filesystem-aware —
+ * see `resolveDependenciesScope` — specifically so callers never have to guess a
+ * project's package manager / lockfile name from the browser. */
+const KNOWN_SCOPES = ['dependencies'] as const;
+type KnownScope = (typeof KNOWN_SCOPES)[number];
+
+function isKnownScope(value: string): value is KnownScope {
+  return (KNOWN_SCOPES as readonly string[]).includes(value);
+}
+
+/**
+ * Resolve `scope: 'dependencies'` into the concrete file set to stage:
+ * `package.json` plus whichever lockfile(s) actually exist in the project.
+ * This is deliberately done server-side (not left to the caller to guess) —
+ * the browser doesn't know the project's filesystem, and the route's `files`
+ * validation 400s on any path that doesn't exist, so a caller sending a
+ * speculative `pnpm-lock.yaml` would break every npm/yarn project.
+ *
+ * Returns `null` (not an empty array) when there's nothing stageable at all —
+ * no `package.json` — so the caller can 400 instead of silently no-op'ing.
+ */
+function resolveDependenciesScope(cwd: string): string[] | null {
+  if (!existsSync(join(cwd, 'package.json'))) return null;
+
+  const files = ['package.json'];
+  for (const lockfile of LOCKFILES) {
+    if (existsSync(join(cwd, lockfile))) files.push(lockfile);
+  }
+  return files;
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -96,7 +128,50 @@ export async function POST(
     // add`, so it is validated strictly: non-array/non-string entries,
     // absolute paths, and anything that escapes the project directory are
     // all rejected with a 400 rather than silently dropped or coerced.
+    //
+    // `scope` is the second, additive way to opt in: a caller that knows
+    // *what kind* of change it made (e.g. a dependency patch) but not the
+    // project's exact filesystem layout (which lockfile it uses, if any)
+    // sends `scope: 'dependencies'` and the server resolves it into concrete
+    // paths — see `resolveDependenciesScope`. `files` and `scope` are
+    // mutually exclusive; at most one of them ends up populating
+    // `filesToStage` below.
     let filesToStage: string[] | null = null;
+
+    if (body.files !== undefined && body.scope !== undefined) {
+      return NextResponse.json(
+        { error: '`files` and `scope` are mutually exclusive; send only one' },
+        { status: 400 }
+      );
+    }
+
+    if (body.scope !== undefined) {
+      if (typeof body.scope !== 'string' || !isKnownScope(body.scope)) {
+        return NextResponse.json(
+          {
+            error: `Unknown \`scope\`: ${JSON.stringify(body.scope)}. Known scopes: ${KNOWN_SCOPES.join(', ')}`,
+          },
+          { status: 400 }
+        );
+      }
+
+      // Only one scope exists today, but resolution is dispatched by value
+      // (rather than assuming `dependencies`) so adding a second scope later
+      // doesn't require touching this branch.
+      const resolved =
+        body.scope === 'dependencies' ? resolveDependenciesScope(cwd) : null;
+
+      if (!resolved) {
+        return NextResponse.json(
+          {
+            error: `scope: 'dependencies' found nothing stageable — no package.json in this project`,
+          },
+          { status: 400 }
+        );
+      }
+
+      filesToStage = resolved;
+    }
 
     if (body.files !== undefined) {
       if (!Array.isArray(body.files)) {
@@ -170,11 +245,11 @@ export async function POST(
     if (filesToStage) {
       await execFileAsync('git', ['add', '--', ...filesToStage], { cwd });
     } else {
-      // No `files` supplied — this is the same `git add -A` the route has
-      // always run, kept as the default specifically so existing callers
-      // (patches page, security accordion, project detail's git panel, the
-      // MCP server) that don't yet send `files` keep working exactly as
-      // before.
+      // Neither `files` nor `scope` supplied — this is the same `git add -A`
+      // the route has always run, kept as the default specifically so
+      // callers that intentionally commit "whatever is dirty" (project
+      // detail's general git panel, the MCP server's git_commit tool) keep
+      // working exactly as before.
       await execFileAsync('git', ['add', '-A'], { cwd });
     }
 
