@@ -4,7 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { _setCacheDirForTest } from './persistence';
 import { _setFindingStatesDirForTest } from './finding-states';
-import { scanProjectWithSources } from './runner';
+import { scanProjectWithSources, _runOneForTest } from './runner';
 import type { ScanSource, Finding } from './types';
 import type { ProjectConfig } from '../types';
 
@@ -28,7 +28,7 @@ function source(id: string, behavior: Partial<{
     scan: async () => {
       if (behavior.delayMs) await new Promise(r => setTimeout(r, behavior.delayMs));
       if (behavior.throw) throw new Error(behavior.throw);
-      return behavior.findings ?? [];
+      return { findings: behavior.findings ?? [] };
     },
   };
 }
@@ -102,7 +102,7 @@ describe('runner.scanProjectWithSources', () => {
       scan: async () => {
         calls++;
         await new Promise(r => setTimeout(r, 50));
-        return [];
+        return { findings: [] };
       },
     };
     const [a, b] = await Promise.all([
@@ -111,5 +111,30 @@ describe('runner.scanProjectWithSources', () => {
     ]);
     expect(calls).toBe(1);
     expect(a).toBe(b);
+  });
+
+  it('propagates a source warning onto the SourceResult', async () => {
+    const source: ScanSource = {
+      id: 'warner',
+      displayName: 'Warner',
+      findingTypes: ['config'],
+      isAvailable: async () => true,
+      scan: async () => ({ findings: [], warning: 'partial scan: 2 advisories unresolved' }),
+    };
+    const { result } = await _runOneForTest(source, { id: 'p', name: 'p', path: '/tmp' } as ProjectConfig);
+    expect(result.status).toBe('ok');
+    expect(result.warning).toBe('partial scan: 2 advisories unresolved');
+  });
+
+  it('leaves warning undefined when a source reports none', async () => {
+    const source: ScanSource = {
+      id: 'quiet',
+      displayName: 'Quiet',
+      findingTypes: ['config'],
+      isAvailable: async () => true,
+      scan: async () => ({ findings: [] }),
+    };
+    const { result } = await _runOneForTest(source, { id: 'p', name: 'p', path: '/tmp' } as ProjectConfig);
+    expect(result.warning).toBeUndefined();
   });
 });

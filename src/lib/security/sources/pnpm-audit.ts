@@ -1,4 +1,4 @@
-import type { ScanSource, Finding, Severity } from '../types';
+import type { ScanSource, Finding, Severity, ScanSourceResult } from '../types';
 import type { ProjectConfig, VulnerabilityInfo } from '../../types';
 import { runPnpmAudit } from '../../patch-scanner';
 import { existsSync } from 'fs';
@@ -77,14 +77,16 @@ export const PnpmAuditSource: ScanSource = {
     return true; // always present — uses the project's package manager
   },
 
-  async scan(project: ProjectConfig): Promise<Finding[]> {
+  async scan(project: ProjectConfig): Promise<ScanSourceResult> {
     const pm = detectPm(project.path);
-    if (!pm) return [];
+    if (!pm) return { findings: [] };
 
     const { vulnerabilities, raw } = await runPnpmAudit(project.path, pm);
-    return vulnerabilities.map((v): Finding => ({
-      ...vulnInfoToFinding(v),
-      rawBySource: { 'pnpm-audit': raw },
-    }));
+    return {
+      findings: vulnerabilities.map((v): Finding => ({
+        ...vulnInfoToFinding(v),
+        rawBySource: { 'pnpm-audit': raw },
+      })),
+    };
   },
 };

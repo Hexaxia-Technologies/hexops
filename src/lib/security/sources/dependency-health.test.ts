@@ -133,7 +133,7 @@ describe('DependencyHealthSource.scan', () => {
       mkdirSync(join(dir, 'src', 'lib'), { recursive: true });
       writeFileSync(join(dir, 'src', 'lib', 'yaml-engine.ts'), "import yaml from 'js-yaml';\n");
 
-      const findings = await DependencyHealthSource.scan({ id: 'p', name: 'p', path: dir } as never);
+      const { findings } = await DependencyHealthSource.scan({ id: 'p', name: 'p', path: dir } as never);
       expect(findings).toHaveLength(1);
       const f = findings[0];
       expect(f).toMatchObject({
@@ -154,7 +154,7 @@ describe('DependencyHealthSource.scan', () => {
   it('returns [] when package.json is absent', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'dh-empty-'));
     try {
-      expect(await DependencyHealthSource.scan({ id: 'p', name: 'p', path: dir } as never)).toEqual([]);
+      expect((await DependencyHealthSource.scan({ id: 'p', name: 'p', path: dir } as never)).findings).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -185,7 +185,7 @@ describe('DependencyHealthSource.scan', () => {
         "import y from 'real-script-pkg';\n"
       );
 
-      const findings = await DependencyHealthSource.scan({ id: 'p', name: 'p', path: tmpDir } as never);
+      const { findings } = await DependencyHealthSource.scan({ id: 'p', name: 'p', path: tmpDir } as never);
 
       const names = findings.map((f) => f.package as string);
       expect(names).not.toContain("fixture-only-pkg");

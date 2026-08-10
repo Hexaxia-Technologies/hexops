@@ -112,8 +112,8 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(vitest@4.1.9)
       cve-lite-cli:
-        specifier: 1.24.0
-        version: 1.24.0
+        specifier: 1.28.0
+        version: 1.28.0
       tailwindcss:
         specifier: 4.3.2
         version: 4.3.2
@@ -1756,8 +1756,8 @@ packages:
   csstype@3.2.3:
     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
 
-  cve-lite-cli@1.24.0:
-    resolution: {integrity: sha512-JrHIIp9ye8nYQ9EShLUTPtO0lJ03LfzoAiTO3rZjxeyAWunBE/XerOBWEhIGshDfBwNqDYgNkj7UjPpnHOeegQ==}
+  cve-lite-cli@1.28.0:
+    resolution: {integrity: sha512-SvccG7tAs4nrPzWU+JLRnzVmufm6c+l65J16+Y+VbM8h5+wqR4JLtWdlLwSm3OTcnarZ2ukEJriLb0glnpAHBw==}
     engines: {node: '>=18'}
     hasBin: true
 
@@ -4239,7 +4239,7 @@ snapshots:
 
   csstype@3.2.3: {}
 
-  cve-lite-cli@1.24.0:
+  cve-lite-cli@1.28.0:
     dependencies:
       better-sqlite3: 12.11.1
       fflate: 0.8.3

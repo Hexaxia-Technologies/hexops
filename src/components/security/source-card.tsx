@@ -6,12 +6,16 @@ const SOURCE_DISPLAY_NAMES: Record<string, string> = {
   'pnpm-audit': 'pnpm-audit',
   grype: 'grype',
   'cve-lite': 'cve-lite',
+  'dependency-health': 'dependency-health',
+  'override-hygiene': 'override-hygiene',
 };
 
 const SOURCE_SCOPE: Record<string, string> = {
   'pnpm-audit': 'lockfile scanner',
   'cve-lite':   'lockfile scanner',
   'grype':      'filesystem/binary scanner',
+  'dependency-health': 'manifest/source scanner',
+  'override-hygiene':  'manifest override auditor',
 };
 
 interface Tone {
@@ -21,7 +25,7 @@ interface Tone {
   label: string;
 }
 
-function pickTone(status: SourceResult['status'], findingCount: number): Tone {
+function pickTone(status: SourceResult['status'], findingCount: number, warning?: string): Tone {
   if (status !== 'ok') {
     const map: Record<Exclude<SourceResult['status'], 'ok'>, Tone> = {
       failed:      { dot: 'bg-red-500',    text: 'text-red-400',    border: 'border-red-700/60',           label: 'failed'      },
@@ -29,6 +33,10 @@ function pickTone(status: SourceResult['status'], findingCount: number): Tone {
       timeout:     { dot: 'bg-orange-500', text: 'text-orange-400', border: 'border-orange-700/60',        label: 'timeout'     },
     };
     return map[status];
+  }
+  if (warning) {
+    // Succeeded but did not cover everything — never show this as clean.
+    return { dot: 'bg-amber-500', text: 'text-amber-400', border: 'border-amber-700/60', label: 'partial' };
   }
   if (findingCount === 0) {
     return { dot: 'bg-green-500', text: 'text-green-400', border: 'border-zinc-800', label: 'clean' };
@@ -48,7 +56,7 @@ export interface SourceCardProps {
 }
 
 export function SourceCard({ result, deepLinkHref }: SourceCardProps) {
-  const tone = pickTone(result.status, result.findingCount);
+  const tone = pickTone(result.status, result.findingCount, result.warning);
   const display = SOURCE_DISPLAY_NAMES[result.id] ?? result.id;
 
   return (
@@ -69,6 +77,9 @@ export function SourceCard({ result, deepLinkHref }: SourceCardProps) {
         <div className="mt-0.5 text-[0.65rem] text-zinc-600 italic">
           {SOURCE_SCOPE[result.id]}
         </div>
+      )}
+      {result.warning && (
+        <div className="mt-1 text-[0.65rem] text-amber-400">{result.warning}</div>
       )}
       {deepLinkHref && (
         <a

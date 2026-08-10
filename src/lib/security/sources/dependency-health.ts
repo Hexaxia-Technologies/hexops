@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { ScanSource, Finding } from '../types';
+import type { ScanSource, Finding, ScanSourceResult } from '../types';
 import type { ProjectConfig } from '../../types';
 import { logger } from '../../logger';
 
@@ -254,13 +254,13 @@ function toFinding(pf: PhantomFinding, version: string | undefined, pm: PackageM
   };
 }
 
-async function scan(project: ProjectConfig): Promise<Finding[]> {
+async function scan(project: ProjectConfig): Promise<ScanSourceResult> {
   const root = project.path;
   let pkg: PkgJson;
   try {
     pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')) as PkgJson;
   } catch {
-    return [];
+    return { findings: [] };
   }
   const declared = new Set<string>([
     ...Object.keys(pkg.dependencies ?? {}),
@@ -283,7 +283,7 @@ async function scan(project: ProjectConfig): Promise<Finding[]> {
     const version = await readInstalledVersion(root, pf.pkg);
     findings.push(toFinding(pf, version, packageManager));
   }
-  return findings;
+  return { findings };
 }
 
 export const DependencyHealthSource: ScanSource = {
