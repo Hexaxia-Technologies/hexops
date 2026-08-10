@@ -68,3 +68,6 @@ docs/dev-notes.md
 docs/plans/
 docs/superpowers/
 .superpowers/
+
+# Playwright MCP session artifacts
+.playwright-mcp/

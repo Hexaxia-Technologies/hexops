@@ -5,6 +5,35 @@ All notable changes to HexOps are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] - 2026-08-10
+
+### Added
+- **Override hygiene scanning** — `OverrideHygieneSource` runs cve-lite's `overrides` subcommand (rules OA001–OA009) as a fifth `ScanSource`, surfacing override-configuration defects as `config` findings on the fleet security view: orphaned targets, floating tags, wrong package-manager section, surpassed pins, nested ineffective overrides, and stale floors.
+- **Override hygiene panel** on the per-project security view — rule id, severity, package, `file > jsonPath` location, and the runnable fix command for each finding, with a confirm-gated "Fix all" control.
+- `GET /api/security/overrides/[id]` — cached override audit (1h TTL), `?force` bypasses.
+- `POST /api/security/overrides/[id]/fix` — runs `cve-lite overrides --fix`, optionally scoped to a single OA rule. Gated by the new `OVERRIDE_HYGIENE_FIX_ENABLED` flag, which ships **disabled** and is enforced server-side with a 409 before any project lookup, so a stale browser tab cannot bypass it. The fix runs an install and is wrapped in the dev-server guard (#109).
+- **Partial-scan reporting** — `scanCompleteness()` distinguishes a genuinely clean scan from one that could not check everything. An incomplete scan raises a warning banner naming the unresolved advisories and skipped dependencies, and marks the source degraded on the fleet cards, so it can no longer read as a green all-clear.
+- `ScanSource.scan` now returns `{ findings, warning? }`, wiring the previously declared-but-unused `SourceResult.warning` end to end and rendering it on the source card.
+
+### Changed
+- `cve-lite-cli` 1.24.0 → 1.28.0.
+- Scan cache entries record the resolved `cve-lite-cli` version; a mismatch is treated as a miss, so a dependency bump invalidates stale reports immediately instead of letting them age out over the TTL. This also closes the stale-fallback path, which could otherwise resurrect a pre-bump report when a scan fails.
+- `json-cache.ts` is now the single namespaced cache implementation; `cve-lite-cache.ts` is a thin wrapper over it, preserving its own public API and on-disk filenames.
+- cve-lite's phantom-dependency rules (PD001/PD002) are excluded from override-hygiene findings — `DependencyHealthSource` (#125) remains the single phantom-dep authority, and it models workspace boundaries correctly where cve-lite currently does not.
+
+### Fixed
+- Parent-upgrade confidence badges no longer render gray for every finding — cve-lite 1.28 renamed the `confidence` values from `exact-direct-child`/`best-effort` to `verified`/`unverified`, and the badge colour map still keyed on the old strings.
+- Unverified parent-upgrade recommendations are now visually distinct from verified ones, rather than being presented as equally trustworthy. 1.28 only recommends a parent upgrade it has proven resolves the vulnerable package.
+- A cache entry with a corrupt `cachedAt` is no longer served as fresh — a non-finite age is now a cache miss (previously `NaN > ttl` evaluated false).
+- Override findings that share a rule id and message text no longer collapse into one in the merger; the `jsonPath` is folded into the finding path so each override entry stays distinct.
+
+### Security
+- **next 16.2.10 → 16.3.0** — clears 9 advisories, 4 of them high: middleware/proxy bypass in App Router with Turbopack and a single locale (GHSA-6gpp-xcg3-4w24), SSRF in Server Actions on custom servers (GHSA-89xv-2m56-2m9x), SSRF via attacker-controlled rewrite destination hostname (GHSA-p9j2-gv94-2wf4), and denial of service in App Router Server Actions (GHSA-m99w-x7hq-7vfj). 16.3.0 was chosen over the 16.2.11 minimum because it also resolves the `next → postcss` path.
+- **postcss override floor `^8.5.15` → `^8.5.23`** — the previous floor resolved to 8.5.16, still exposed to path traversal via `sourceMappingURL` auto-loading (GHSA-r28c-9q8g-f849) and GHSA-fxqj-rqcc-2cmp. Now resolves 8.5.26. The override is flat, so it also covers the `@tailwindcss/postcss → postcss` path the next upgrade alone does not reach.
+- `nanoid` and `sharp` advisories cleared as a side effect of the next upgrade.
+
+---
+
 ## [0.20.1] - 2026-05-21
 
 ### Performance
