@@ -6,12 +6,16 @@ const SOURCE_DISPLAY_NAMES: Record<string, string> = {
   'pnpm-audit': 'pnpm-audit',
   grype: 'grype',
   'cve-lite': 'cve-lite',
+  'dependency-health': 'dependency-health',
+  'override-hygiene': 'override-hygiene',
 };
 
 const SOURCE_SCOPE: Record<string, string> = {
   'pnpm-audit': 'lockfile scanner',
   'cve-lite':   'lockfile scanner',
   'grype':      'filesystem/binary scanner',
+  'dependency-health': 'manifest/source scanner',
+  'override-hygiene':  'manifest override auditor',
 };
 
 interface Tone {
