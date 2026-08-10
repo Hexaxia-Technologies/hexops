@@ -16,6 +16,7 @@ import { CveLiteFindings } from '@/components/security/cve-lite/cve-lite-finding
 import { CveLiteToolbar } from '@/components/security/cve-lite/cve-lite-toolbar';
 import { CveLiteScanControls } from '@/components/security/cve-lite/cve-lite-scan-controls';
 import { CveLiteManage } from '@/components/security/cve-lite/cve-lite-manage';
+import { OverrideHygienePanel } from '@/components/security/cve-lite/override-hygiene-panel';
 import { ConfirmDialog } from '@/components/security/cve-lite/confirm-dialog';
 import { PendingCommitBanner } from '@/components/security/cve-lite/pending-commit-banner';
 import { SourcePluginCards } from '@/components/security/source-plugin-cards';
@@ -1287,6 +1288,10 @@ export function ProjectSecurityAccordion({
               <section>
                 <h2 className="text-sm font-medium text-zinc-300 mb-2">Findings</h2>
                 <CveLiteFindings rows={rows} onApply={AUTO_APPLY_ENABLED ? applyOne : undefined} />
+              </section>
+              <section>
+                <h2 className="text-sm font-medium text-zinc-300 mb-2">Override hygiene</h2>
+                <OverrideHygienePanel projectId={project.id} />
               </section>
             </>
           )}
