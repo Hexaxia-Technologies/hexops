@@ -70,6 +70,19 @@ function gitError(code: number, message = 'git failed') {
 
 const OK = { stdout: '', stderr: '' };
 
+/** Every git call the route makes, as `[cmd, args, options]` triples. */
+function gitCalls(): Array<[string, string[], Record<string, unknown>]> {
+  return mockExecFileAsync.mock.calls as Array<[string, string[], Record<string, unknown>]>;
+}
+
+/** The argv of the single `git <sub>` invocation matching `match`, or undefined. */
+function gitArgs(sub: string, match?: (args: string[]) => boolean): string[] | undefined {
+  return gitCalls()
+    .filter(([, args]) => args[0] === sub && (!match || match(args)))
+    .map(([, args]) => args)[0];
+}
+
+
 describe('POST /api/projects/[id]/git-commit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -108,6 +121,23 @@ describe('POST /api/projects/[id]/git-commit', () => {
         ['add', '-A'],
         expect.objectContaining({ cwd: PROJECT.path })
       );
+    });
+
+    it('sets GIT_LITERAL_PATHSPECS=1 on every git invocation', async () => {
+      scriptGit({
+        add: async () => OK,
+        diff: async () => {
+          throw gitError(1);
+        },
+        commit: async () => ({ stdout: 'commit ok', stderr: '' }),
+      });
+
+      await POST(makeRequest({ message: 'x' }), makeParams());
+
+      expect(gitCalls().length).toBeGreaterThan(0);
+      for (const [, , opts] of gitCalls()) {
+        expect((opts.env as Record<string, string>).GIT_LITERAL_PATHSPECS).toBe('1');
+      }
     });
   });
 
@@ -237,6 +267,83 @@ describe('POST /api/projects/[id]/git-commit', () => {
       expect(res.status).toBe(400);
       const data = await res.json();
       expect(data.error).toMatch(/empty/i);
+    });
+
+    // F3: `--` terminates option parsing but does NOT disable pathspec magic.
+    // Verified against real git from a subdirectory: `git add -- ':/root.txt'`
+    // exits 0 and stages the repo-root file; `git add -- ':(top)apps/api/.env'`
+    // likewise. Both pass isAbsolute/`..`/containment checks.
+    it.each([
+      [':/root.txt', 'repo-root magic'],
+      [':(top)apps/api/.env', '(top) magic'],
+      [':!package.json', 'exclude magic'],
+      [':(exclude)package.json', '(exclude) magic'],
+    ])('400s on git pathspec magic %s (%s) without running git', async (badPath) => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const res = await POST(
+        makeRequest({ message: 'x', files: [badPath] }),
+        makeParams()
+      );
+      expect(res.status).toBe(400);
+      expect(mockExecFileAsync).not.toHaveBeenCalled();
+    });
+
+    // F8: `.git/config`, `.git/hooks/pre-commit` previously passed validation.
+    it.each(['.git/config', '.git/hooks/pre-commit', 'sub/.git/config', '.GIT/config'])(
+      '400s on a `.git` path segment (%s) without running git',
+      async (badPath) => {
+        vi.mocked(existsSync).mockReturnValue(true);
+        const res = await POST(
+          makeRequest({ message: 'x', files: [badPath] }),
+          makeParams()
+        );
+        expect(res.status).toBe(400);
+        expect(mockExecFileAsync).not.toHaveBeenCalled();
+      }
+    );
+
+    it('400s on a path containing a NUL byte without running git', async () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const res = await POST(
+        makeRequest({ message: 'x', files: ['package.json\u0000evil'] }),
+        makeParams()
+      );
+      expect(res.status).toBe(400);
+      expect(mockExecFileAsync).not.toHaveBeenCalled();
+    });
+
+    it('no git command runs at all when a traversal path is rejected', async () => {
+      for (const badPath of ['/etc/passwd', '../../etc/passwd', 'sub/../../outside.txt']) {
+        vi.clearAllMocks();
+        vi.mocked(getProject).mockReturnValue(PROJECT as ReturnType<typeof getProject>);
+        const res = await POST(makeRequest({ message: 'x', files: [badPath] }), makeParams());
+        expect(res.status).toBe(400);
+        expect(mockExecFileAsync).not.toHaveBeenCalled();
+      }
+    });
+
+    // F9: a failing `git status --porcelain -- <path>` used to be swallowed
+    // into `false`, so the route answered 400 "File(s) not found: x" for a file
+    // that exists — the same collapse-every-error-into-one-meaning bug this
+    // branch fixed at the empty-check.
+    it('surfaces a `git status` failure as a 500, not a 400 "file not found"', async () => {
+      vi.mocked(existsSync).mockReturnValue(false);
+      scriptGit({
+        status: async () => {
+          throw gitError(128, 'fatal: not a git repository');
+        },
+      });
+
+      const res = await POST(
+        makeRequest({ message: 'x', files: ['package.json'] }),
+        makeParams()
+      );
+
+      expect(res.status).toBe(500);
+      const data = await res.json();
+      expect(data.error).toMatch(/not a git repository/);
+      expect(data.error).not.toMatch(/not found/i);
+      expect(gitArgs('add')).toBeUndefined();
     });
   });
 

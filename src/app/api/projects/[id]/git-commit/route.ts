@@ -10,22 +10,59 @@ import { LOCKFILES } from '@/lib/patch-storage';
 const execFileAsync = promisify(execFile);
 
 /**
+ * Options for every git invocation this route makes.
+ *
+ * `GIT_LITERAL_PATHSPECS=1` is the belt to the validator's braces: `--`
+ * terminates *option* parsing but does NOT disable git's pathspec magic, so a
+ * pathspec like `:/root.txt` or `:(top)apps/api/.env` is still reinterpreted as
+ * repo-root-relative and escapes the project directory (verified against real
+ * git). With this env var set, git treats every pathspec as a literal path
+ * relative to the cwd, so the magic prefixes cannot fire at all. Consequence:
+ * this route must never rely on pathspec magic itself — it doesn't.
+ */
+function gitOptions(cwd: string, extra: Record<string, unknown> = {}) {
+  return {
+    cwd,
+    env: { ...process.env, GIT_LITERAL_PATHSPECS: '1' },
+    ...extra,
+  };
+}
+
+/**
  * Validate that a caller-supplied relative path is safe to hand to `git add`:
- * a non-empty string, not absolute, no `.`/`..` path segments, and (after
- * joining onto the project directory) still resolves inside it. This input
- * is untrusted — it comes straight from the request body and is passed to a
- * shell-adjacent git invocation, so reject anything suspicious outright
- * rather than trying to sanitize it.
+ * a non-empty string, not absolute, no pathspec-magic prefix, no `.`/`..` or
+ * `.git` path segments, no control characters, and (after joining onto the
+ * project directory) still resolves inside it. This input is untrusted — it
+ * comes straight from the request body and is passed to a shell-adjacent git
+ * invocation, so reject anything suspicious outright rather than trying to
+ * sanitize it.
  */
 function isSafeProjectRelativePath(cwd: string, candidate: string): boolean {
   if (typeof candidate !== 'string' || candidate.length === 0) return false;
   if (candidate.trim() !== candidate) return false;
   if (isAbsolute(candidate)) return false;
 
+  // A leading `:` makes git reinterpret the whole argument as pathspec magic
+  // (`:/x` = repo root, `:(top)x`, `:(exclude)x`, `:!x`, ...). None of those are
+  // legitimate file paths, and every one of them escapes `cwd`.
+  if (candidate.startsWith(':')) return false;
+
+  // NULs and other control bytes cannot appear in an execFile argument (Node
+  // throws ERR_INVALID_ARG_VALUE); reject them here so the caller gets a clear
+  // 400 rather than an opaque 500 from deep inside the git call.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point
+  if (/[\u0000-\u001f\u007f]/.test(candidate)) return false;
+
   const segments = candidate.split(/[\\/]+/);
   if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
     return false;
   }
+  // Nothing under `.git` is ever a legitimate commit target. Git already
+  // neutralizes `git add -- .git/config` (exit 0, stages nothing), but that
+  // produces a confusing "No changes to commit" instead of a clear rejection,
+  // and leaving the hole open weakens a defense-in-depth check. Case-insensitive
+  // because `.GIT` resolves to the same directory on case-insensitive volumes.
+  if (segments.some((segment) => segment.toLowerCase() === '.git')) return false;
 
   const resolvedRelative = relative(cwd, join(cwd, candidate));
   if (resolvedRelative.startsWith('..') || isAbsolute(resolvedRelative)) return false;
@@ -38,19 +75,24 @@ function isSafeProjectRelativePath(cwd: string, candidate: string): boolean {
  * removed from the working tree). Without this check, `git add` fails on a
  * caller-supplied path that doesn't exist, and — critically — a naive
  * `existsSync` check alone would also skip real deletions, since a deleted
- * file by definition doesn't exist on disk anymore. */
+ * file by definition doesn't exist on disk anymore.
+ *
+ * Deliberately does NOT catch: a clean non-match is `git status` exiting 0 with
+ * empty output, and that is the only thing that may be reported as "not
+ * stageable". Any *failure* of the status call (git missing, not a repository,
+ * unreadable index, an invalid argument) is a different fact entirely and is
+ * rethrown so it surfaces as a 500 — swallowing it would answer 400 "File(s)
+ * not found: x" for a file that plainly does exist, which is the same
+ * collapse-every-error-into-one-meaning bug this route fixed at the
+ * empty-check. */
 async function isStageable(cwd: string, relPath: string): Promise<boolean> {
   if (existsSync(join(cwd, relPath))) return true;
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      ['status', '--porcelain', '--', relPath],
-      { cwd }
-    );
-    return stdout.trim().length > 0;
-  } catch {
-    return false;
-  }
+  const { stdout } = await execFileAsync(
+    'git',
+    ['status', '--porcelain', '--', relPath],
+    gitOptions(cwd)
+  );
+  return stdout.trim().length > 0;
 }
 
 /** Scope values `scope` may take. Resolution is server-side and filesystem-aware —
@@ -126,8 +168,8 @@ export async function POST(
     // dependency-patch commits (which then auto-deployed for some managed
     // projects). `files` is untrusted request input and is passed to `git
     // add`, so it is validated strictly: non-array/non-string entries,
-    // absolute paths, and anything that escapes the project directory are
-    // all rejected with a 400 rather than silently dropped or coerced.
+    // absolute paths, pathspec magic, .git segments, and anything that
+    // escapes the project directory are all rejected with a 400 rather than silently dropped or coerced.
     //
     // `scope` is the second, additive way to opt in: a caller that knows
     // *what kind* of change it made (e.g. a dependency patch) but not the
@@ -219,7 +261,7 @@ export async function POST(
       if (unsafe.length > 0) {
         return NextResponse.json(
           {
-            error: `\`files\` entries must be relative paths inside the project (no absolute paths or ".."): ${unsafe.join(', ')}`,
+            error: `\`files\` entries must be plain relative paths inside the project (no absolute paths, "..", ".git", or ":" pathspec magic): ${unsafe.join(', ')}`,
           },
           { status: 400 }
         );
@@ -243,14 +285,14 @@ export async function POST(
     }
 
     if (filesToStage) {
-      await execFileAsync('git', ['add', '--', ...filesToStage], { cwd });
+      await execFileAsync('git', ['add', '--', ...filesToStage], gitOptions(cwd));
     } else {
       // Neither `files` nor `scope` supplied — this is the same `git add -A`
       // the route has always run, kept as the default specifically so
       // callers that intentionally commit "whatever is dirty" (project
       // detail's general git panel, the MCP server's git_commit tool) keep
       // working exactly as before.
-      await execFileAsync('git', ['add', '-A'], { cwd });
+      await execFileAsync('git', ['add', '-A'], gitOptions(cwd));
     }
 
     // Check if the scoped stage actually produced staged changes. This
@@ -264,7 +306,7 @@ export async function POST(
     // swallowed as if there were changes to commit.
     let hasStaged: boolean;
     try {
-      await execFileAsync('git', ['diff', '--cached', '--quiet'], { cwd });
+      await execFileAsync('git', ['diff', '--cached', '--quiet'], gitOptions(cwd));
       hasStaged = false; // exit 0 = no staged differences
     } catch (err) {
       const code = (err as { code?: number }).code;
@@ -286,7 +328,7 @@ export async function POST(
     const { stdout, stderr } = await execFileAsync(
       'git',
       ['commit', '-m', message],
-      { cwd, timeout: 30000 }
+      gitOptions(cwd, { timeout: 30000 })
     );
 
     // Log success
