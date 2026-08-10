@@ -19,6 +19,7 @@ import { CveLiteManage } from '@/components/security/cve-lite/cve-lite-manage';
 import { OverrideHygienePanel } from '@/components/security/cve-lite/override-hygiene-panel';
 import { ConfirmDialog } from '@/components/security/cve-lite/confirm-dialog';
 import { PendingCommitBanner } from '@/components/security/cve-lite/pending-commit-banner';
+import { CompletenessBanner } from '@/components/security/cve-lite/completeness-banner';
 import { SourcePluginCards } from '@/components/security/source-plugin-cards';
 import type { PluginCardEntry } from '@/lib/security/plugins/types';
 import { AUTO_APPLY_ENABLED } from '@/lib/auto-apply-flag';
@@ -1281,6 +1282,7 @@ export function ProjectSecurityAccordion({
           {error && <div className="text-sm text-red-400">{error}</div>}
           {!loading && !error && visibleReport && (
             <>
+              <CompletenessBanner report={visibleReport} />
               <section>
                 <h2 className="text-sm font-medium text-zinc-300 mb-2">Fix plan</h2>
                 <FixPlan groups={groups} onFixAll={AUTO_APPLY_ENABLED ? fixAll : undefined} fixingAll={busy} />
