@@ -21,12 +21,18 @@ const SEVERITY_MAP: Record<string, Severity> = {
  * HexOps's phantom-dep authority, and config findings dedup on title+path, so
  * letting both report would show the same phantom dep twice on /security.
  */
-const EXCLUDED_RULES = new Set(['PD001', 'PD002']);
+export const EXCLUDED_RULES = new Set(['PD001', 'PD002']);
 
 export function parseOverrideAuditJson(out: OverrideAuditOutput): Finding[] {
 	const findings: Finding[] = [];
 	for (const of of out.findings ?? []) {
-		const ruleId = of.ruleId ?? 'OA000';
+		// A missing/unrecognised ruleId used to default to 'OA000', which isn't in
+		// EXCLUDED_RULES — an unlabelled phantom-dep finding would slip past the
+		// PD filter and duplicate DependencyHealthSource. Rather than invent a
+		// taxonomy to classify it, drop anything we can't positively identify as
+		// a known, non-excluded rule (F7).
+		const ruleId = of.ruleId;
+		if (!ruleId) continue;
 		if (EXCLUDED_RULES.has(ruleId)) continue;
 		findings.push(toFinding(of, ruleId));
 	}
@@ -36,14 +42,18 @@ export function parseOverrideAuditJson(out: OverrideAuditOutput): Finding[] {
 function toFinding(of: OverrideFinding, ruleId: string): Finding {
 	const file = of.location?.file ?? 'package.json';
 	const jsonPath = of.location?.jsonPath ?? '';
+	const pkgName = of.package?.name;
 	return {
 		type: 'config',
 		dedupKey: '',
 		sources: ['override-hygiene'],
 		// jsonPath is part of the path so two findings of the same rule on
 		// different override entries get distinct dedup keys — the fixture
-		// contains two OA009 findings with identical message text.
-		path: jsonPath ? `${file}#${jsonPath}` : file,
+		// contains two OA009 findings with identical message text. When jsonPath
+		// is absent, fall back to the package name (rather than bare `file`) so
+		// same-rule findings on different packages with identical message text
+		// don't collide on the merger's `config:<path>|<title>` dedup key (F6).
+		path: jsonPath ? `${file}#${jsonPath}` : pkgName ? `${file}#${pkgName}` : file,
 		title: `${ruleId}: ${of.message ?? 'Override hygiene finding'}`,
 		detail: of.details ?? '',
 		package: of.package?.name,

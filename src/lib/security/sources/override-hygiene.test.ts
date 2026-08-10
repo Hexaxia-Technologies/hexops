@@ -52,4 +52,26 @@ describe('parseOverrideAuditJson', () => {
   it('returns an empty array for an empty report', () => {
     expect(parseOverrideAuditJson({})).toEqual([]);
   });
+
+  it('drops a finding with a missing ruleId instead of defaulting it into scope (F7)', () => {
+    const findings = parseOverrideAuditJson({
+      findings: [
+        { severity: 'high', package: { name: 'x' }, message: 'no ruleId at all' },
+        { ruleId: 'OA001', severity: 'high', package: { name: 'y' }, message: 'has a ruleId' },
+      ],
+    });
+    expect(findings.map((f) => f.package)).toEqual(['y']);
+  });
+
+  it('gives same-rule, same-message findings on different packages distinct dedup keys even without jsonPath (F6)', () => {
+    const findings = parseOverrideAuditJson({
+      findings: [
+        { ruleId: 'OA009', severity: 'low', package: { name: 'pkg-a' }, message: 'Override floor already met' },
+        { ruleId: 'OA009', severity: 'low', package: { name: 'pkg-b' }, message: 'Override floor already met' },
+      ],
+    });
+    expect(findings).toHaveLength(2);
+    const keys = findings.map((f) => computeDedupKey(f));
+    expect(new Set(keys).size).toBe(2);
+  });
 });
