@@ -663,7 +663,17 @@ export function ProjectSecurityAccordion({
     try {
       const res = await fetch(`/api/projects/${project.id}/git-commit`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: pendingCommit.message, source: 'cve-lite', advisories: pendingCommit.advisories }),
+        // Scope this commit to dependency files (package.json + whatever
+        // lockfile the project actually has) so unrelated in-progress work
+        // in the tree isn't swept into — and potentially auto-deployed by —
+        // a cve-lite remediation commit. Resolved server-side; the browser
+        // doesn't know the project's filesystem layout.
+        body: JSON.stringify({
+          message: pendingCommit.message,
+          source: 'cve-lite',
+          advisories: pendingCommit.advisories,
+          scope: 'dependencies',
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || (data as { success?: boolean }).success === false) throw new Error((data as { error?: string }).error ?? `commit failed (HTTP ${res.status})`);

@@ -467,7 +467,13 @@ export default function PatchesPage() {
       const res = await fetch(`/api/projects/${projectId}/git-commit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: state.pendingCommit.message }),
+        // Scope this commit to dependency files (package.json + whatever
+        // lockfile the project actually has) so an unrelated in-progress
+        // change in the working tree doesn't get swept into — and
+        // auto-deployed by — a dependency-patch commit. The server resolves
+        // the concrete file set; the browser doesn't know the project's
+        // filesystem layout.
+        body: JSON.stringify({ message: state.pendingCommit.message, scope: 'dependencies' }),
       });
       const data = await res.json();
 

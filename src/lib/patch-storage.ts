@@ -23,8 +23,10 @@ const CACHE_TTL_JITTER_MS = 15 * 60 * 1000;
 // Bump when the cache schema changes to force automatic invalidation of old entries
 const CACHE_SCHEMA_VERSION = 3;
 
-// Lockfiles fingerprinted (alongside package.json) to detect out-of-band dep changes
-const LOCKFILES = ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb'];
+// Lockfiles fingerprinted (alongside package.json) to detect out-of-band dep changes.
+// Exported so other server-side code (e.g. the git-commit route's `scope: 'dependencies'`
+// resolution) can stage the same file set without redefining it and drifting out of sync.
+export const LOCKFILES = ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb'];
 
 /**
  * Fingerprint a project's dependency state from package.json + its lockfile(s).
