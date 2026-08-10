@@ -12,3 +12,14 @@ export const AUTO_APPLY_ENABLED: boolean = true;
  * Needs a safer workflow (preview resolved-tree delta, bounded scope) before re-enabling.
  */
 export const FIX_VIA_OVERRIDE_ENABLED: boolean = false;
+
+/**
+ * Gates `cve-lite overrides --fix`, which rewrites override entries in
+ * package.json. Deliberately independent of AUTO_APPLY_ENABLED and
+ * FIX_VIA_OVERRIDE_ENABLED so CVE fixes can stay enabled while override
+ * rewriting stays off. Default off until the behavior is trusted on the fleet.
+ *
+ * cve-lite's chokepoint guard means --fix can only remove, repin, move, or
+ * relocate an EXISTING override key — it can never introduce a new one.
+ */
+export const OVERRIDE_HYGIENE_FIX_ENABLED: boolean = false;
