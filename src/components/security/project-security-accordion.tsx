@@ -1282,7 +1282,10 @@ export function ProjectSecurityAccordion({
           {error && <div className="text-sm text-red-400">{error}</div>}
           {!loading && !error && visibleReport && (
             <>
-              <CompletenessBanner report={visibleReport} />
+              {/* Completeness is a property of the scan, not of the "imported only" view
+                  filter — pass the unfiltered report so a filtered-out finding with an
+                  unresolved advisory can't make a partial scan look clean (F1). */}
+              <CompletenessBanner report={report} />
               <section>
                 <h2 className="text-sm font-medium text-zinc-300 mb-2">Fix plan</h2>
                 <FixPlan groups={groups} onFixAll={AUTO_APPLY_ENABLED ? fixAll : undefined} fixingAll={busy} />

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProject } from '@/lib/config';
 import { runOverrideAudit, overrideAuditAvailable } from '@/lib/security/override-audit';
-import { parseOverrideAuditJson } from '@/lib/security/sources/override-hygiene';
+import { parseOverrideAuditJson, EXCLUDED_RULES } from '@/lib/security/sources/override-hygiene';
 import { logger } from '@/lib/logger';
 
 export async function GET(
@@ -18,8 +18,14 @@ export async function GET(
 		|| new URL(req.url).searchParams.get('force') != null;
 	try {
 		const report = await runOverrideAudit(project, { force });
+		// The panel renders `findings` directly, so it must carry the same
+		// PD001/PD002 exclusion as `rows` — otherwise a real phantom dep shows up
+		// twice: once from DependencyHealthSource, once from this raw array (F2).
+		const findings = (report.findings ?? []).filter(
+			(f) => !EXCLUDED_RULES.has(f.ruleId ?? ''),
+		);
 		return NextResponse.json({
-			findings: report.findings ?? [],
+			findings,
 			rows: parseOverrideAuditJson(report),
 		});
 	} catch (err) {

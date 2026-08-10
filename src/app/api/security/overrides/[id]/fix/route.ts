@@ -25,7 +25,7 @@ export async function POST(
 			{
 				ok: false,
 				error:
-					'Override hygiene fixes are disabled in HexOps. Set OVERRIDE_HYGIENE_FIX_ENABLED to enable.',
+					'Override hygiene fixes are disabled in HexOps. Set OVERRIDE_HYGIENE_FIX_ENABLED to true in src/lib/auto-apply-flag.ts and rebuild to enable.',
 			},
 			{ status: 409 },
 		);
@@ -38,11 +38,15 @@ export async function POST(
 		return NextResponse.json({ error: 'cve-lite not installed' }, { status: 503 });
 	}
 
-	const body = (await req.json().catch(() => ({}))) as { rule?: string };
-	if (body.rule !== undefined && !RULE_RE.test(body.rule)) {
+	const body = (await req.json().catch(() => ({}))) as { rule?: unknown };
+	// typeof guard first: RULE_RE.test() coerces a non-string via toString(), so
+	// ["OA009"] would otherwise pass the anchored regex and reach JSON.stringify
+	// as an array, emitting the unquoted shell token [ "OA009" ] (F4).
+	if (body.rule !== undefined && (typeof body.rule !== 'string' || !RULE_RE.test(body.rule))) {
 		return NextResponse.json({ error: 'rule must match OA###' }, { status: 400 });
 	}
-	const ruleFlags = body.rule ? ['--rule', body.rule] : [];
+	const rule = body.rule as string | undefined;
+	const ruleFlags = rule ? ['--rule', rule] : [];
 
 	// overrides --fix runs an install; guard the dev server (#109).
 	const guardOutcome = await runWithDevServerGuard(
@@ -69,6 +73,9 @@ export async function POST(
 	);
 
 	if (guardOutcome.blocked) {
+		logger.info('api', 'override_hygiene_fix_blocked', `overrides --fix on ${id} blocked by dev-server guard: ${guardOutcome.reason}`, {
+			projectId: id,
+		});
 		return NextResponse.json(
 			{
 				ok: false,
@@ -80,6 +87,15 @@ export async function POST(
 	}
 
 	const { ok, summary } = guardOutcome.result!;
+	// Surface stopped/restarted/restartError like the sibling fix endpoints do —
+	// otherwise a restart failure after a successful fix is silently swallowed
+	// and HexOps reports plain success while the dev server stays dead (F5).
+	const devServerGuard = {
+		action: guardOutcome.decision,
+		stopped: guardOutcome.stopped,
+		restarted: guardOutcome.restarted,
+		...(guardOutcome.restartError ? { restartError: guardOutcome.restartError } : {}),
+	};
 	if (ok) {
 		await runOverrideAudit(project, { force: true }).catch(() => {});
 		await runSecurityScan(project).catch(() => {});
@@ -87,5 +103,5 @@ export async function POST(
 	logger.info('api', 'override_hygiene_fix', `overrides --fix on ${id} (ok=${ok})`, {
 		projectId: id,
 	});
-	return NextResponse.json({ ok, summary, rescanned: ok });
+	return NextResponse.json({ ok, summary, rescanned: ok, devServerGuard });
 }

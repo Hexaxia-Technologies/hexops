@@ -41,6 +41,21 @@ describe('GET /api/security/overrides/[id]', () => {
     expect(body.rows[0].title).toContain('OA009');
   });
 
+  it('excludes PD001/PD002 from the raw findings array, not just rows (F2)', async () => {
+    vi.mocked(getProject).mockReturnValue({ id: 'p', name: 'p', path: '/tmp' } as never);
+    vi.mocked(overrideAuditAvailable).mockReturnValue(true);
+    vi.mocked(runOverrideAudit).mockResolvedValue({
+      findings: [
+        { ruleId: 'PD001', severity: 'high', package: { name: 'js-yaml' }, message: 'phantom' },
+        { ruleId: 'OA009', severity: 'low', package: { name: 'ws' }, message: 'stale floor' },
+      ],
+    });
+    const res = await GET(new Request('http://x/') as never, params('p'));
+    const body = await res.json();
+    expect(body.findings).toHaveLength(1);
+    expect(body.findings[0].ruleId).toBe('OA009');
+  });
+
   it('passes force through when ?force is present', async () => {
     vi.mocked(getProject).mockReturnValue({ id: 'p', name: 'p', path: '/tmp' } as never);
     vi.mocked(overrideAuditAvailable).mockReturnValue(true);
