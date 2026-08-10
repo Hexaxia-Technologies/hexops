@@ -35,6 +35,7 @@ async function runOne(source: ScanSource, project: ProjectConfig): Promise<{ res
   const start = Date.now();
   let status: SourceStatus = 'ok';
   let error: string | undefined;
+  let warning: string | undefined;
   let findings: Finding[] = [];
 
   const available = await source.isAvailable().catch(() => false);
@@ -48,7 +49,8 @@ async function runOne(source: ScanSource, project: ProjectConfig): Promise<{ res
       return { ok: false } as const;
     });
     if (status === 'ok' && 'ok' in outcome && outcome.ok) {
-      findings = outcome.value;
+      findings = outcome.value.findings;
+      warning = outcome.value.warning;
     } else if (status === 'ok') {
       status = 'timeout';
     }
@@ -63,9 +65,12 @@ async function runOne(source: ScanSource, project: ProjectConfig): Promise<{ res
       durationMs: Date.now() - start,
       findingCount: findings.length,
       error,
+      warning,
     },
   };
 }
+
+export const _runOneForTest = runOne;
 
 export async function scanProjectWithSources(project: ProjectConfig, sources: ScanSource[]): Promise<ScanResult> {
   const existing = inflight.get(project.id);

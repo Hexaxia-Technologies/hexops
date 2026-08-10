@@ -1,6 +1,6 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import type { ScanSource, Finding, Severity } from '../types';
+import type { ScanSource, Finding, Severity, ScanSourceResult } from '../types';
 import type { ProjectConfig } from '../../types';
 
 const execAsync = promisify(exec);
@@ -102,12 +102,12 @@ export const GrypeSource: ScanSource = {
 
   isAvailable: probe,
 
-  async scan(project: ProjectConfig): Promise<Finding[]> {
+  async scan(project: ProjectConfig): Promise<ScanSourceResult> {
     await maybeUpdateDb();
     const { stdout } = await execAsync(
       `grype dir:${JSON.stringify(project.path)} -o json --quiet`,
       { timeout: 110_000, maxBuffer: 50 * 1024 * 1024 },
     );
-    return parseGrypeJson(JSON.parse(stdout) as GrypeOutput);
+    return { findings: parseGrypeJson(JSON.parse(stdout) as GrypeOutput) };
   },
 };

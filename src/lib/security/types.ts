@@ -67,11 +67,17 @@ export interface ScanResult {
   findings: Finding[];
 }
 
+export interface ScanSourceResult {
+  findings: Finding[];
+  /** Set when the source succeeded but could not cover everything. Surfaces as SourceResult.warning. */
+  warning?: string;
+}
+
 export interface ScanSource {
   id: string;
   displayName: string;
   findingTypes: FindingType[];
   timeoutMs?: number;
   isAvailable(): Promise<boolean>;
-  scan(project: ProjectConfig): Promise<Finding[]>;
+  scan(project: ProjectConfig): Promise<ScanSourceResult>;
 }
