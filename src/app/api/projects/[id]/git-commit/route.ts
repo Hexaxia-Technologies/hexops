@@ -95,7 +95,7 @@ async function isStageable(cwd: string, relPath: string): Promise<boolean> {
   return stdout.trim().length > 0;
 }
 
-/** Scope values `scope` may take. Resolution is server-side and filesystem-aware —
+/** Scope values `scope` may take. Resolution is server-side and git-aware —
  * see `resolveDependenciesScope` — specifically so callers never have to guess a
  * project's package manager / lockfile name from the browser. */
 const KNOWN_SCOPES = ['dependencies'] as const;
@@ -105,25 +105,195 @@ function isKnownScope(value: string): value is KnownScope {
   return (KNOWN_SCOPES as readonly string[]).includes(value);
 }
 
-/**
- * Resolve `scope: 'dependencies'` into the concrete file set to stage:
- * `package.json` plus whichever lockfile(s) actually exist in the project.
- * This is deliberately done server-side (not left to the caller to guess) —
- * the browser doesn't know the project's filesystem, and the route's `files`
- * validation 400s on any path that doesn't exist, so a caller sending a
- * speculative `pnpm-lock.yaml` would break every npm/yarn project.
- *
- * Returns `null` (not an empty array) when there's nothing stageable at all —
- * no `package.json` — so the caller can 400 instead of silently no-op'ing.
- */
-function resolveDependenciesScope(cwd: string): string[] | null {
-  if (!existsSync(join(cwd, 'package.json'))) return null;
+/** Basenames that count as "a dependency file", at any depth. `package.json`
+ * plus the lockfile list already used to fingerprint dependency state for
+ * patch-cache invalidation — reused rather than duplicated so the two cannot
+ * drift apart. */
+const DEPENDENCY_FILENAMES: ReadonlySet<string> = new Set<string>([
+  'package.json',
+  ...LOCKFILES,
+]);
 
-  const files = ['package.json'];
-  for (const lockfile of LOCKFILES) {
-    if (existsSync(join(cwd, lockfile))) files.push(lockfile);
+/** Paths resolved for a scope, split by what each is safe to be used for. */
+interface ScopedPaths {
+  /** Paths to hand to `git add --`. */
+  stage: string[];
+  /** Pathspec for `git diff --cached` and `git commit` — a superset of `stage`,
+   * additionally carrying the *source* path of a rename that git has already
+   * staged. That source path must appear in the commit pathspec (otherwise the
+   * deletion half of the rename is not recorded) but must NOT be passed to
+   * `git add`, which fails with `fatal: pathspec '<old>' did not match any
+   * files` once the rename is in the index. Verified against real git. */
+  commit: string[];
+  /** Dependency files with an unresolved merge conflict. Staging these would
+   * commit conflict markers, and git refuses a partial commit during a merge
+   * anyway, so the route rejects instead. */
+  conflicted: string[];
+}
+
+/** True for any path with a `node_modules` segment. Installed packages ship
+ * their own `package.json` and lockfiles; none of them belong in a commit. */
+function isInsideNodeModules(repoPath: string): boolean {
+  return repoPath.split('/').includes('node_modules');
+}
+
+/** `git status --porcelain` reports paths relative to the *repository root*,
+ * not to the cwd, while every pathspec we later pass back to git (under
+ * `GIT_LITERAL_PATHSPECS`) is interpreted relative to the cwd. Convert, and drop
+ * anything that isn't under the project directory. `prefix` is
+ * `git rev-parse --show-prefix`: empty at the repo root (the case for every
+ * currently configured project), `sub/dir/` for a project nested inside a
+ * larger repo. */
+function toProjectRelative(repoPath: string, prefix: string): string | null {
+  if (!prefix) return repoPath || null;
+  if (!repoPath.startsWith(prefix)) return null;
+  const rel = repoPath.slice(prefix.length);
+  return rel.length > 0 ? rel : null;
+}
+
+/**
+ * Resolve `scope: 'dependencies'` into the concrete file set to stage, from
+ * **git's view of what changed** rather than from `existsSync` over a fixed
+ * root-only list. That single change fixes three failures at once:
+ *
+ * - a lockfile that exists on disk but is gitignored (one stray `npm install`
+ *   in a pnpm repo) is no longer included, so `git add` no longer aborts with
+ *   "paths are ignored by one of your .gitignore files" *after* having already
+ *   staged `package.json` — which left the index dirty and made every retry
+ *   fail identically. git does not report ignored files, so they never enter
+ *   the set;
+ * - a *deleted* lockfile is included, because git reports deletions — an
+ *   `existsSync` filter by definition cannot see them, so switching package
+ *   managers produced a commit that omitted the removal and left the repo
+ *   tracking a lockfile that no longer exists;
+ * - nested workspace `package.json` files are included at any depth, because
+ *   git reports them wherever they are. `npm install --workspaces` /
+ *   `pnpm add -r` rewrite every workspace manifest; committing the lockfile
+ *   without them yields a commit on which `install --frozen-lockfile` fails.
+ *
+ * Accepted porcelain entries (`XY <path>`, NUL-separated via `-z` so paths are
+ * never quoted or escaped regardless of `core.quotePath`):
+ * - any ordinary change — `M`, `A`, `D`, `T`, `R`, `C` in either column — whose
+ *   basename is in `DEPENDENCY_FILENAMES`;
+ * - untracked *files* (`??`) with a dependency basename, e.g. a brand-new
+ *   lockfile. Untracked *directory* entries (git collapses them to a single
+ *   `?? some/dir/` record) are skipped: staging a whole directory would sweep
+ *   in everything inside it, which is precisely what this route exists to stop.
+ *   The trade-off is that a dependency file inside a wholly-untracked new
+ *   directory is not picked up; default (`-unormal`) untracked handling is kept
+ *   rather than `-uall` so git never has to enumerate every untracked file in
+ *   the tree.
+ * Rejected: anything under `node_modules/` at any depth; anything outside the
+ * project directory; ignored entries; and unmerged entries (`U` in either
+ * column, plus `AA`/`DD`), which are reported back as `conflicted`.
+ *
+ * No depth bound is applied: the basename allowlist plus the `node_modules`
+ * exclusion already bound the set to real manifests, and a depth cap would
+ * silently drop legitimate deeply-nested workspace packages.
+ *
+ * Any failure of the git calls propagates — a resolver that cannot see the
+ * repository must not answer "nothing changed".
+ */
+async function resolveDependenciesScope(cwd: string): Promise<ScopedPaths> {
+  const { stdout: prefixOut } = await execFileAsync(
+    'git',
+    ['rev-parse', '--show-prefix'],
+    gitOptions(cwd)
+  );
+  const prefix = prefixOut.trim();
+
+  // `-- .` limits the report to the project directory: without it, a project
+  // nested inside a larger repository would pull in sibling projects' manifests.
+  const { stdout } = await execFileAsync(
+    'git',
+    ['status', '--porcelain', '-z', '--', '.'],
+    gitOptions(cwd, { maxBuffer: 32 * 1024 * 1024 })
+  );
+
+  const stage: string[] = [];
+  const commit: string[] = [];
+  const conflicted: string[] = [];
+  const seenStage = new Set<string>();
+  const seenCommit = new Set<string>();
+
+  const record = (repoPath: string, alsoStage: boolean) => {
+    if (isInsideNodeModules(repoPath)) return;
+    const rel = toProjectRelative(repoPath, prefix);
+    if (rel === null) return;
+    if (!seenCommit.has(rel)) {
+      seenCommit.add(rel);
+      commit.push(rel);
+    }
+    if (alsoStage && !seenStage.has(rel)) {
+      seenStage.add(rel);
+      stage.push(rel);
+    }
+  };
+
+  const fields = stdout.split('\0');
+  for (let i = 0; i < fields.length; i++) {
+    const entry = fields[i];
+    // `XY <path>` — shortest possible record is 4 chars. The split leaves a
+    // trailing empty field after the final NUL.
+    if (!entry || entry.length < 4) continue;
+
+    const x = entry[0];
+    const y = entry[1];
+    const path = entry.slice(3);
+
+    // Rename/copy records carry the source path in the *next* NUL-separated
+    // field; consume it here so parsing stays in sync whether or not the entry
+    // ends up being selected.
+    const isRenameOrCopy = x === 'R' || x === 'C' || y === 'R' || y === 'C';
+    const source = isRenameOrCopy ? fields[++i] : undefined;
+
+    if (x === '!' && y === '!') continue; // ignored (only emitted with --ignored)
+    if (path.endsWith('/')) continue; // collapsed untracked directory
+    if (isInsideNodeModules(path)) continue;
+
+    const basename = path.slice(path.lastIndexOf('/') + 1);
+    if (!DEPENDENCY_FILENAMES.has(basename)) continue;
+
+    const isUnmerged =
+      x === 'U' || y === 'U' || (x === 'A' && y === 'A') || (x === 'D' && y === 'D');
+    if (isUnmerged) {
+      const rel = toProjectRelative(path, prefix);
+      if (rel !== null) conflicted.push(rel);
+      continue;
+    }
+
+    record(path, true);
+    // Rename source: commit pathspec only, never `git add`.
+    if (source) record(source, false);
   }
-  return files;
+
+  return { stage, commit, conflicted };
+}
+
+/**
+ * Paths already in the index that this scoped commit is about to leave behind.
+ *
+ * Passing a pathspec to `git commit` correctly excludes a developer's
+ * pre-staged unrelated work from *this* commit — but it stays staged, and their
+ * next commit picks it up. Silently absorbing it is the bug this route exists to
+ * fix; silently resetting it would destroy staged work, which is worse. So it is
+ * neither committed nor touched — just reported.
+ *
+ * `--relative` makes the output cwd-relative so it compares directly against the
+ * scoped pathspec (which is also cwd-relative). For a project nested inside a
+ * larger repo that means staged files elsewhere in that repo are not reported;
+ * they are also outside the project's purview.
+ */
+async function findStagedOutsideScope(cwd: string, scopePaths: string[]): Promise<string[]> {
+  const { stdout } = await execFileAsync(
+    'git',
+    ['diff', '--cached', '--name-only', '-z', '--relative'],
+    gitOptions(cwd, { maxBuffer: 32 * 1024 * 1024 })
+  );
+  const inScope = new Set(scopePaths);
+  return stdout
+    .split('\0')
+    .filter((p) => p.length > 0 && !inScope.has(p));
 }
 
 export async function POST(
@@ -168,17 +338,24 @@ export async function POST(
     // dependency-patch commits (which then auto-deployed for some managed
     // projects). `files` is untrusted request input and is passed to `git
     // add`, so it is validated strictly: non-array/non-string entries,
-    // absolute paths, pathspec magic, .git segments, and anything that
-    // escapes the project directory are all rejected with a 400 rather than silently dropped or coerced.
+    // absolute paths, pathspec magic, `.git` segments, and anything that
+    // escapes the project directory are all rejected with a 400 rather than
+    // silently dropped or coerced.
     //
     // `scope` is the second, additive way to opt in: a caller that knows
     // *what kind* of change it made (e.g. a dependency patch) but not the
-    // project's exact filesystem layout (which lockfile it uses, if any)
-    // sends `scope: 'dependencies'` and the server resolves it into concrete
-    // paths — see `resolveDependenciesScope`. `files` and `scope` are
-    // mutually exclusive; at most one of them ends up populating
-    // `filesToStage` below.
-    let filesToStage: string[] | null = null;
+    // project's exact layout (which lockfile it uses, which workspaces it has)
+    // sends `scope: 'dependencies'` and the server resolves it from git — see
+    // `resolveDependenciesScope`. `files` and `scope` are mutually exclusive;
+    // at most one of them ends up populating the two path lists below.
+    //
+    // Two lists, not one: `stagePaths` is what `git add` receives, `scopePaths`
+    // is the pathspec for the empty-check and the commit. They differ only for
+    // an already-staged rename (see `ScopedPaths.commit`). Both are null on the
+    // unscoped fallback path, which keeps the bare `git add -A` /
+    // `git diff --cached` / `git commit -m` forms.
+    let stagePaths: string[] | null = null;
+    let scopePaths: string[] | null = null;
 
     if (body.files !== undefined && body.scope !== undefined) {
       return NextResponse.json(
@@ -197,13 +374,10 @@ export async function POST(
         );
       }
 
-      // Only one scope exists today, but resolution is dispatched by value
-      // (rather than assuming `dependencies`) so adding a second scope later
-      // doesn't require touching this branch.
-      const resolved =
-        body.scope === 'dependencies' ? resolveDependenciesScope(cwd) : null;
-
-      if (!resolved) {
+      // Cheap pre-flight: `scope: 'dependencies'` against a project with no
+      // package.json at all is a caller mistake, not "nothing to commit", and
+      // is worth a distinct 400 before any git process is spawned.
+      if (!existsSync(join(cwd, 'package.json'))) {
         return NextResponse.json(
           {
             error: `scope: 'dependencies' found nothing stageable — no package.json in this project`,
@@ -212,7 +386,30 @@ export async function POST(
         );
       }
 
-      filesToStage = resolved;
+      // Only one scope exists today, but resolution is dispatched by value
+      // (rather than assuming `dependencies`) so adding a second scope later
+      // doesn't require touching this branch.
+      const resolved =
+        body.scope === 'dependencies' ? await resolveDependenciesScope(cwd) : null;
+
+      if (!resolved) {
+        return NextResponse.json(
+          { error: `Unknown \`scope\`: ${JSON.stringify(body.scope)}` },
+          { status: 400 }
+        );
+      }
+
+      if (resolved.conflicted.length > 0) {
+        return NextResponse.json(
+          {
+            error: `Unresolved merge conflict in: ${resolved.conflicted.join(', ')}. Resolve it before committing dependency changes.`,
+          },
+          { status: 409 }
+        );
+      }
+
+      stagePaths = resolved.stage;
+      scopePaths = resolved.commit;
     }
 
     if (body.files !== undefined) {
@@ -281,11 +478,23 @@ export async function POST(
         );
       }
 
-      filesToStage = safe;
+      stagePaths = safe;
+      scopePaths = safe;
     }
 
-    if (filesToStage) {
-      await execFileAsync('git', ['add', '--', ...filesToStage], gitOptions(cwd));
+    // An empty scoped set must short-circuit here. Falling through would run
+    // `git add --` and then `git diff --cached --quiet --` / `git commit -m … --`
+    // with no pathspec at all, which is exactly the whole-index behavior this
+    // route is scoping away from.
+    if (scopePaths && scopePaths.length === 0) {
+      return NextResponse.json({
+        success: false,
+        error: 'No changes to commit',
+      });
+    }
+
+    if (stagePaths) {
+      await execFileAsync('git', ['add', '--', ...stagePaths], gitOptions(cwd));
     } else {
       // Neither `files` nor `scope` supplied — this is the same `git add -A`
       // the route has always run, kept as the default specifically so
@@ -295,8 +504,33 @@ export async function POST(
       await execFileAsync('git', ['add', '-A'], gitOptions(cwd));
     }
 
-    // Check if the scoped stage actually produced staged changes. This
-    // checks the index (`git diff --cached`), not the whole worktree
+    // Report — never absorb, never reset — anything the developer had staged
+    // that this commit's pathspec excludes. See `findStagedOutsideScope`.
+    const stagedOutsideScope = scopePaths
+      ? await findStagedOutsideScope(cwd, scopePaths)
+      : [];
+    const warnings =
+      stagedOutsideScope.length > 0
+        ? [
+            `Left staged, not included in this commit: ${stagedOutsideScope.join(', ')}. These were already in the index; they remain staged and will be picked up by your next commit.`,
+          ]
+        : undefined;
+    if (warnings) {
+      logger.warn(
+        'git',
+        'commit_scope_index_residue',
+        `Scoped commit excluded ${stagedOutsideScope.length} already-staged path(s)`,
+        { projectId: id, meta: { paths: stagedOutsideScope, ...(source ? { source } : {}) } }
+      );
+    }
+
+    // Check if the scoped stage actually produced staged changes — scoped to
+    // the same pathspec the commit will use. Without the pathspec this reads
+    // the whole index, so a no-op dependency patch plus unrelated staged work
+    // reported "changes present" and produced a commit whose entire content
+    // was that unrelated work, under a `chore(deps): …` message.
+    //
+    // This checks the index (`git diff --cached`), not the whole worktree
     // (`git status --porcelain` would also report unstaged/untracked files
     // outside what we just staged, which is the wrong signal here). A
     // non-zero exit from `git diff --cached --quiet` means there ARE staged
@@ -304,9 +538,13 @@ export async function POST(
     // for an unrelated reason, so only exit code 1 is treated as "there are
     // changes"; anything else is a real failure and is surfaced, not
     // swallowed as if there were changes to commit.
+    const diffArgs = scopePaths
+      ? ['diff', '--cached', '--quiet', '--', ...scopePaths]
+      : ['diff', '--cached', '--quiet'];
+
     let hasStaged: boolean;
     try {
-      await execFileAsync('git', ['diff', '--cached', '--quiet'], gitOptions(cwd));
+      await execFileAsync('git', diffArgs, gitOptions(cwd));
       hasStaged = false; // exit 0 = no staged differences
     } catch (err) {
       const code = (err as { code?: number }).code;
@@ -321,13 +559,24 @@ export async function POST(
       return NextResponse.json({
         success: false,
         error: 'No changes to commit',
+        ...(warnings ? { warnings } : {}),
       });
     }
 
-    // Execute git commit
+    // Execute git commit. When a scoped file set is in play the pathspec is
+    // mandatory: `git commit -m <msg>` with no pathspec commits the ENTIRE
+    // index, so scoping `git add` alone accomplished nothing except making the
+    // resulting over-broad commit harder to spot, since the UI reported it as
+    // scoped. The pathspec form commits worktree content for those paths, which
+    // is what we want here, and it does record deletions and staged renames
+    // (both verified against real git).
+    const commitArgs = scopePaths
+      ? ['commit', '-m', message, '--', ...scopePaths]
+      : ['commit', '-m', message];
+
     const { stdout, stderr } = await execFileAsync(
       'git',
-      ['commit', '-m', message],
+      commitArgs,
       gitOptions(cwd, { timeout: 30000 })
     );
 
@@ -344,6 +593,7 @@ export async function POST(
     return NextResponse.json({
       success: true,
       output: stdout || stderr || 'Commit successful',
+      ...(warnings ? { warnings } : {}),
     });
   } catch (error) {
     console.error('Git commit failed:', error);
