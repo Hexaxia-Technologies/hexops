@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import semver from 'semver';
 import { execAsync, NPM_INSTALL_TIMEOUT, type UpdatePackage, type UpdateResult } from './common';
 import { addPatchHistoryEntry, generatePatchId } from '@/lib/patch-storage';
 import { getUpdateType } from '@/lib/patch-scanner';
@@ -7,6 +8,49 @@ import { logger } from '@/lib/logger';
 
 function pkgJsonIndent(raw: string): string {
   return raw.match(/^(\s+)/m)?.[1] || '  ';
+}
+
+/**
+ * Convert a concrete target version into a caret ("floor") range so that
+ * package-manager overrides stop hard-pinning the fleet to a single exact
+ * version forever (see #postcss-floor-audit: 29/32 projects were stuck on an
+ * exact postcss pin that blocked routine updates past a vulnerable version).
+ *
+ * - Concrete versions ("8.5.26") become a caret floor ("^8.5.26") so a normal
+ *   `update` can still move the resolved version forward within the same
+ *   major line, but never below the floor.
+ * - Dist-tags ("latest", "next", "canary") and anything else that isn't a
+ *   single concrete semver (including ranges that are already ranges) pass
+ *   through unchanged — you cannot caret a tag, and re-wrapping an existing
+ *   range would be wrong.
+ * - Prereleases ("1.0.0-beta.1") are floored the same way as any other
+ *   concrete version. `^1.0.0-beta.1` only matches later prereleases of the
+ *   *same* major.minor.patch plus the eventual stable 1.0.0 release — it will
+ *   not reach into a different prerelease line. That's inherent to how npm's
+ *   semver treats prerelease tags (a range only admits a prerelease that
+ *   shares [major,minor,patch] with one of its comparators), not something
+ *   this function can or should work around. A prerelease override is
+ *   already a narrow, deliberate pin, so that narrower floor is the correct
+ *   behavior rather than a special case to avoid.
+ */
+export function toFloorRange(version: string): string {
+  const parsed = semver.valid(version, { loose: true });
+  return parsed ? `^${parsed}` : version;
+}
+
+/**
+ * Whether an installed version satisfies a target that applyOverrides wrote
+ * as a floor. For concrete targets, "installed >= target" counts as success
+ * — resolving higher than the floor is the point, not a mismatch. Falls back
+ * to exact string equality when either side isn't a parseable concrete
+ * version (dist-tag targets like "latest"), matching the pre-floor behavior.
+ */
+function meetsFloorTarget(installedVersion: string | undefined, targetVersion: string): boolean {
+  if (!installedVersion) return false;
+  const installed = semver.valid(installedVersion, { loose: true });
+  const target = semver.valid(targetVersion, { loose: true });
+  if (installed && target) return semver.gte(installed, target);
+  return installedVersion === targetVersion;
 }
 
 /** Remove override/resolution entries that conflict with a direct-dep update. */
@@ -24,11 +68,31 @@ export function removeOverrideConflicts(
     const yarnResolutions: Record<string, string> | undefined = pkgJson?.resolutions;
     let changed = false;
 
+    // An existing override/resolution is only a "conflict" with the incoming
+    // direct-dep update if it would actually block that update from landing.
+    // Once applyOverrides writes floors ("^8.5.23") instead of exact pins,
+    // a plain string comparison against the new target ("8.5.26") is always
+    // unequal — that would delete the very floor we just wrote, on every
+    // subsequent direct-dep update. Test satisfaction instead: keep the
+    // existing range if the new target already falls within it.
+    const conflictsWithTarget = (pinned: string, targetVersion: string, isFloating: boolean): boolean => {
+      if (isFloating) return true; // latest/next/canary always force a fresh, unpinned resolution
+      const range = semver.validRange(pinned, { loose: true });
+      const target = semver.valid(targetVersion, { loose: true });
+      if (range && target) {
+        return !semver.satisfies(target, range, { loose: true, includePrerelease: true });
+      }
+      // Either side isn't parseable semver (e.g. an npm "$pkg" alias or a git
+      // URL) — fall back to the original strict string comparison so those
+      // unusual specifiers keep their prior, well-understood behavior.
+      return pinned !== targetVersion;
+    };
+
     for (const pkg of directPkgs) {
       const isFloating = /^(latest|next|canary)$/.test(pkg.targetVersion);
       if (pnpmOverrides?.[pkg.name] !== undefined) {
         const pinned = pnpmOverrides[pkg.name];
-        if (isFloating || pinned !== pkg.targetVersion) {
+        if (conflictsWithTarget(pinned, pkg.targetVersion, isFloating)) {
           delete pkgJson.pnpm.overrides[pkg.name];
           changed = true;
           logger.info('patches', 'override_conflict_removed', `Removed conflicting pnpm.overrides[${pkg.name}]=${pinned} before updating to ${pkg.targetVersion}`, { projectId, meta: { package: pkg.name } });
@@ -36,7 +100,7 @@ export function removeOverrideConflicts(
       }
       if (npmOverrides?.[pkg.name] !== undefined) {
         const pinned = npmOverrides[pkg.name];
-        if (isFloating || pinned !== pkg.targetVersion) {
+        if (conflictsWithTarget(pinned, pkg.targetVersion, isFloating)) {
           delete pkgJson.overrides[pkg.name];
           changed = true;
           logger.info('patches', 'override_conflict_removed', `Removed conflicting overrides[${pkg.name}]=${pinned} before updating to ${pkg.targetVersion}`, { projectId, meta: { package: pkg.name } });
@@ -44,7 +108,7 @@ export function removeOverrideConflicts(
       }
       if (yarnResolutions?.[pkg.name] !== undefined) {
         const pinned = yarnResolutions[pkg.name];
-        if (isFloating || pinned !== pkg.targetVersion) {
+        if (conflictsWithTarget(pinned, pkg.targetVersion, isFloating)) {
           delete pkgJson.resolutions[pkg.name];
           changed = true;
           logger.info('patches', 'override_conflict_removed', `Removed conflicting resolutions[${pkg.name}]=${pinned} before updating to ${pkg.targetVersion}`, { projectId, meta: { package: pkg.name } });
@@ -85,11 +149,25 @@ export function cleanStaleOverrides(
         const nmPath = join(cwd, 'node_modules', lookupPkg, 'package.json');
         if (existsSync(nmPath)) {
           const installed = JSON.parse(readFileSync(nmPath, 'utf-8')).version;
+          // Only exact pins ("8.5.15") are ever candidates for staleness
+          // removal here — deliberately, not incidentally. A range-valued
+          // override (the "^8.5.23" floors this file now writes) resolving
+          // to something newer than its base is the expected, desired
+          // outcome, not staleness: the floor is still doing its job of
+          // keeping the fleet off the vulnerable version. Removing it would
+          // strip that security floor entirely. So range-shaped values
+          // (anything starting with <, >, =, ^, or ~) are skipped outright,
+          // same as before — only bare exact versions are compared.
           if (installed && pinnedVersion && !/^[<>=^~]/.test(pinnedVersion)) {
-            const iv = installed.split('.').map((n: string) => parseInt(n, 10) || 0);
-            const pv = pinnedVersion.split('.').map((n: string) => parseInt(n, 10) || 0);
-            const isNewer = iv[0] > pv[0] || (iv[0] === pv[0] && iv[1] > pv[1]) || (iv[0] === pv[0] && iv[1] === pv[1] && (iv[2] ?? 0) > (pv[2] ?? 0));
-            if (isNewer) staleKeys.push(overridePkg);
+            const iv = semver.valid(installed, { loose: true });
+            const pv = semver.valid(pinnedVersion, { loose: true });
+            // Proper semver comparison instead of hand-rolled parseInt
+            // splitting, which mishandled prereleases (1.0.0-beta.1 vs
+            // 1.0.0) and build metadata (1.0.0+build vs 1.0.0). If either
+            // side isn't a parseable concrete version, skip rather than
+            // guess — the old code silently treated unparseable segments as
+            // 0, which could misfire as "newer" on garbage input.
+            if (iv && pv && semver.gt(iv, pv)) staleKeys.push(overridePkg);
           }
         }
       } catch { /* skip entry */ }
@@ -143,20 +221,26 @@ export async function applyOverrides(
     if (packageManager === 'pnpm') {
       if (!pkgJson.pnpm) pkgJson.pnpm = {};
       if (!pkgJson.pnpm.overrides) pkgJson.pnpm.overrides = {};
-      for (const pkg of overridePkgs) pkgJson.pnpm.overrides[pkg.name] = pkg.targetVersion;
+      for (const pkg of overridePkgs) pkgJson.pnpm.overrides[pkg.name] = toFloorRange(pkg.targetVersion);
     } else if (packageManager === 'npm') {
       if (!pkgJson.overrides) pkgJson.overrides = {};
       for (const pkg of overridePkgs) {
         if (pkgJson.dependencies?.[pkg.name] !== undefined) {
-          pkgJson.dependencies[pkg.name] = pkg.targetVersion;
+          // Direct dependency: npm can't apply `overrides` to a package that's
+          // also a direct dependency, so the only way to move it is to rewrite
+          // the direct specifier itself. That specifier is exactly as prone to
+          // the "exact pin blocks future updates" problem this whole change
+          // exists to fix, so it gets the same floor treatment as the
+          // override-only path below — not left as an exact pin silently.
+          pkgJson.dependencies[pkg.name] = toFloorRange(pkg.targetVersion);
         } else {
           if (pkgJson.devDependencies?.[pkg.name] !== undefined) delete pkgJson.devDependencies[pkg.name];
-          pkgJson.overrides[pkg.name] = pkg.targetVersion;
+          pkgJson.overrides[pkg.name] = toFloorRange(pkg.targetVersion);
         }
       }
     } else {
       if (!pkgJson.resolutions) pkgJson.resolutions = {};
-      for (const pkg of overridePkgs) pkgJson.resolutions[pkg.name] = pkg.targetVersion;
+      for (const pkg of overridePkgs) pkgJson.resolutions[pkg.name] = toFloorRange(pkg.targetVersion);
     }
 
     writeFileSync(pkgJsonPath, JSON.stringify(pkgJson, null, pkgJsonIndent(pkgJsonRaw)) + '\n', 'utf-8');
@@ -177,7 +261,9 @@ export async function applyOverrides(
       const anyResolved = overridePkgs.some(pkg => {
         try {
           const p = join(cwd, 'node_modules', pkg.name, 'package.json');
-          return existsSync(p) && JSON.parse(readFileSync(p, 'utf-8')).version === pkg.targetVersion;
+          if (!existsSync(p)) return false;
+          const installedVersion = JSON.parse(readFileSync(p, 'utf-8')).version;
+          return meetsFloorTarget(installedVersion, pkg.targetVersion);
         } catch { return false; }
       });
       if (!anyResolved) throw new Error(err.stderr || err.message || 'Install after override failed');
@@ -189,7 +275,12 @@ export async function applyOverrides(
         const installedPkgPath = join(cwd, 'node_modules', pkg.name, 'package.json');
         if (existsSync(installedPkgPath)) {
           const installedVersion = JSON.parse(readFileSync(installedPkgPath, 'utf-8')).version;
-          if (installedVersion !== pkg.targetVersion) {
+          // With a caret floor written instead of an exact pin, resolving to
+          // something newer than the target is success, not a mismatch — the
+          // floor did its job. Only warn when the resolved version doesn't
+          // meet the floor (or, for dist-tag targets, isn't an exact match,
+          // same as the pre-floor behavior).
+          if (!meetsFloorTarget(installedVersion, pkg.targetVersion)) {
             verifyWarning = ` ⚠ override written but ${pkg.name} resolved to ${installedVersion} — may need lockfile reset`;
             logger.warn('patches', 'override_version_mismatch', `Override for ${pkg.name}: expected ${pkg.targetVersion}, got ${installedVersion}`, {
               projectId,
