@@ -11,45 +11,69 @@ function pkgJsonIndent(raw: string): string {
 }
 
 /**
- * Convert a concrete target version into a caret ("floor") range so that
+ * Convert a concrete target version into a `>=` ("floor") range so that
  * package-manager overrides stop hard-pinning the fleet to a single exact
  * version forever (see #postcss-floor-audit: 29/32 projects were stuck on an
  * exact postcss pin that blocked routine updates past a vulnerable version).
  *
- * - Concrete versions ("8.5.26") become a caret floor ("^8.5.26") so a normal
- *   `update` can still move the resolved version forward within the same
- *   major line, but never below the floor.
+ * Uses a bare `>=` floor, not a caret, by deliberate choice (owner decision):
+ * - Caret is inert below 1.0.0. `^0.0.3` expands to `>=0.0.3 <0.0.4-0` —
+ *   exactly one version, byte-identical in effect to the exact pin this
+ *   change exists to eliminate. `^0.5.1` caps at `<0.6.0-0`, and in the 0.x
+ *   line the *minor* is the breaking axis, so that cap is still too tight.
+ * - Caret also has a ceiling at the next major, so it can never admit a fix
+ *   that ships in a later major version — exactly the scenario a security
+ *   floor needs to survive.
+ * - `>=` matches the convention already used elsewhere in this repo's own
+ *   `package.json` overrides (`esbuild: ">=0.28.1"`, `qs`, `hono`, `ws`).
+ *
+ * - Concrete versions ("8.5.26") become a floor (">=8.5.26") so a normal
+ *   `update` can still move the resolved version forward with no ceiling at
+ *   all, but never below the floor.
  * - Dist-tags ("latest", "next", "canary") and anything else that isn't a
  *   single concrete semver (including ranges that are already ranges) pass
- *   through unchanged — you cannot caret a tag, and re-wrapping an existing
+ *   through unchanged — you cannot floor a tag, and re-wrapping an existing
  *   range would be wrong.
  * - Prereleases ("1.0.0-beta.1") are floored the same way as any other
- *   concrete version. `^1.0.0-beta.1` only matches later prereleases of the
- *   *same* major.minor.patch plus the eventual stable 1.0.0 release — it will
- *   not reach into a different prerelease line. That's inherent to how npm's
- *   semver treats prerelease tags (a range only admits a prerelease that
- *   shares [major,minor,patch] with one of its comparators), not something
- *   this function can or should work around. A prerelease override is
- *   already a narrow, deliberate pin, so that narrower floor is the correct
- *   behavior rather than a special case to avoid.
+ *   concrete version. `>=1.0.0-beta.1` has no upper bound at all, so it
+ *   matches every later stable release (1.9.4, 2.5.0, ...) exactly like a
+ *   normal `>=` floor would. The one narrowing that still applies is npm
+ *   semver's prerelease-tuple rule: a *prerelease* candidate (not a stable
+ *   release) only satisfies the range if it shares [major,minor,patch] with
+ *   a prerelease comparator already in the range — so `1.0.0-beta.5` and
+ *   `1.0.0-rc.1` satisfy it, but `2.0.0-alpha.1` does not. That's inherent
+ *   to how npm's semver treats prerelease tags, not something this function
+ *   can or should work around.
  */
 export function toFloorRange(version: string): string {
   const parsed = semver.valid(version, { loose: true });
-  return parsed ? `^${parsed}` : version;
+  return parsed ? `>=${parsed}` : version;
 }
 
 /**
- * Whether an installed version satisfies a target that applyOverrides wrote
- * as a floor. For concrete targets, "installed >= target" counts as success
- * — resolving higher than the floor is the point, not a mismatch. Falls back
- * to exact string equality when either side isn't a parseable concrete
- * version (dist-tag targets like "latest"), matching the pre-floor behavior.
+ * Whether an installed version satisfies the override value applyOverrides
+ * actually wrote for this target — `toFloorRange(targetVersion)` — rather
+ * than a plain "installed >= target" scalar comparison.
+ *
+ * This exists to verify the override actually took effect. A plain scalar
+ * comparison is too permissive for that job: a keyed pnpm override
+ * (`pkg@>=range`), a workspace catalog entry, or a parent package's own
+ * constraint can all steer the resolved version somewhere the override we
+ * wrote never sanctioned, and "installed >= target" would still read as
+ * success. Testing satisfaction against the exact range we wrote is what
+ * makes this a real verification rather than a rubber stamp — while still
+ * correctly treating "resolved higher than the floor" as success, since the
+ * range itself has no upper bound.
+ *
+ * Falls back to exact string equality when the written value isn't a
+ * parseable range (dist-tag targets like "latest"), matching the pre-floor
+ * behavior.
  */
-function meetsFloorTarget(installedVersion: string | undefined, targetVersion: string): boolean {
+function satisfiesWrittenOverride(installedVersion: string | undefined, targetVersion: string): boolean {
   if (!installedVersion) return false;
-  const installed = semver.valid(installedVersion, { loose: true });
-  const target = semver.valid(targetVersion, { loose: true });
-  if (installed && target) return semver.gte(installed, target);
+  const written = toFloorRange(targetVersion);
+  const range = semver.validRange(written, { loose: true });
+  if (range) return semver.satisfies(installedVersion, range, { loose: true });
   return installedVersion === targetVersion;
 }
 
@@ -70,7 +94,7 @@ export function removeOverrideConflicts(
 
     // An existing override/resolution is only a "conflict" with the incoming
     // direct-dep update if it would actually block that update from landing.
-    // Once applyOverrides writes floors ("^8.5.23") instead of exact pins,
+    // Once applyOverrides writes floors (">=8.5.23") instead of exact pins,
     // a plain string comparison against the new target ("8.5.26") is always
     // unequal — that would delete the very floor we just wrote, on every
     // subsequent direct-dep update. Test satisfaction instead: keep the
@@ -80,7 +104,11 @@ export function removeOverrideConflicts(
       const range = semver.validRange(pinned, { loose: true });
       const target = semver.valid(targetVersion, { loose: true });
       if (range && target) {
-        return !semver.satisfies(target, range, { loose: true, includePrerelease: true });
+        // No includePrerelease here: npm/pnpm evaluate override ranges
+        // without that flag when resolving, so this check has to match
+        // resolver semantics, not be more permissive than the actual
+        // resolution the range will ever be subjected to.
+        return !semver.satisfies(target, range, { loose: true });
       }
       // Either side isn't parseable semver (e.g. an npm "$pkg" alias or a git
       // URL) — fall back to the original strict string comparison so those
@@ -151,7 +179,7 @@ export function cleanStaleOverrides(
           const installed = JSON.parse(readFileSync(nmPath, 'utf-8')).version;
           // Only exact pins ("8.5.15") are ever candidates for staleness
           // removal here — deliberately, not incidentally. A range-valued
-          // override (the "^8.5.23" floors this file now writes) resolving
+          // override (the ">=8.5.23" floors this file now writes) resolving
           // to something newer than its base is the expected, desired
           // outcome, not staleness: the floor is still doing its job of
           // keeping the fleet off the vulnerable version. Removing it would
@@ -263,7 +291,16 @@ export async function applyOverrides(
           const p = join(cwd, 'node_modules', pkg.name, 'package.json');
           if (!existsSync(p)) return false;
           const installedVersion = JSON.parse(readFileSync(p, 'utf-8')).version;
-          return meetsFloorTarget(installedVersion, pkg.targetVersion);
+          // A version on disk that's identical to what was installed BEFORE
+          // this override ran is not evidence the install succeeded — it's
+          // evidence the install failed and left the pre-existing tree
+          // untouched. Without this guard, a failed install (registry 5xx,
+          // ERESOLVE, disk full) with a stale-but-already-satisfying copy in
+          // node_modules would get silently swallowed here, every package in
+          // this batch would report success, and the caller would go on to
+          // reconcile/audit a tree whose install never actually completed.
+          if (pkg.fromVersion && installedVersion === pkg.fromVersion) return false;
+          return satisfiesWrittenOverride(installedVersion, pkg.targetVersion);
         } catch { return false; }
       });
       if (!anyResolved) throw new Error(err.stderr || err.message || 'Install after override failed');
@@ -275,12 +312,18 @@ export async function applyOverrides(
         const installedPkgPath = join(cwd, 'node_modules', pkg.name, 'package.json');
         if (existsSync(installedPkgPath)) {
           const installedVersion = JSON.parse(readFileSync(installedPkgPath, 'utf-8')).version;
-          // With a caret floor written instead of an exact pin, resolving to
+          // With a `>=` floor written instead of an exact pin, resolving to
           // something newer than the target is success, not a mismatch — the
-          // floor did its job. Only warn when the resolved version doesn't
-          // meet the floor (or, for dist-tag targets, isn't an exact match,
-          // same as the pre-floor behavior).
-          if (!meetsFloorTarget(installedVersion, pkg.targetVersion)) {
+          // floor did its job. But this still has to be a real check, not a
+          // rubber stamp: compare against the range actually written
+          // (satisfiesWrittenOverride), not a bare "installed >= target"
+          // scalar, so a genuine mismatch (a keyed override, workspace
+          // catalog, or parent constraint steering resolution outside what
+          // we wrote) is still caught — see project issue #126, where a bare
+          // `>=` previously failed to move the resolved version under
+          // pnpm's node-linker=hoisted and this check is the only thing that
+          // detects that.
+          if (!satisfiesWrittenOverride(installedVersion, pkg.targetVersion)) {
             verifyWarning = ` ⚠ override written but ${pkg.name} resolved to ${installedVersion} — may need lockfile reset`;
             logger.warn('patches', 'override_version_mismatch', `Override for ${pkg.name}: expected ${pkg.targetVersion}, got ${installedVersion}`, {
               projectId,

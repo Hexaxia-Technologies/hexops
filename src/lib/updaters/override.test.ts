@@ -4,10 +4,12 @@
 // deps in place. The regression under test: applyOverrides used to write an
 // EXACT pin ("postcss": "8.5.15"), which permanently blocks routine updates
 // past a vulnerable version (29/32 projects were stuck this way on
-// GHSA-r28c-9q8g-f849). It now writes a caret floor ("^8.5.15") instead, and
-// the sibling functions (removeOverrideConflicts, cleanStaleOverrides) had to
-// stop assuming exact-pin string equality so they don't immediately delete
-// the floor applyOverrides just wrote.
+// GHSA-r28c-9q8g-f849). It now writes a `>=` floor ("postcss": ">=8.5.15")
+// instead — not a caret, because caret is inert below 1.0.0 and caps at the
+// next major even above 1.0.0 (see toFloorRange's JSDoc for the full
+// rationale) — and the sibling functions (removeOverrideConflicts,
+// cleanStaleOverrides) had to stop assuming exact-pin string equality so
+// they don't immediately delete the floor applyOverrides just wrote.
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
@@ -80,12 +82,13 @@ function writeInstalledVersion(dir: string, pkgName: string, version: string): v
 afterEach(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
   dirs.length = 0;
-  execAsyncMock.mockClear();
+  execAsyncMock.mockReset();
+  execAsyncMock.mockResolvedValue({ stdout: '', stderr: '' });
 });
 
 describe('toFloorRange', () => {
-  it('turns a concrete version into a caret floor', () => {
-    expect(toFloorRange('8.5.26')).toBe('^8.5.26');
+  it('turns a concrete version into a >= floor', () => {
+    expect(toFloorRange('8.5.26')).toBe('>=8.5.26');
   });
 
   it('passes dist-tags through unchanged', () => {
@@ -94,11 +97,23 @@ describe('toFloorRange', () => {
     expect(toFloorRange('canary')).toBe('canary');
   });
 
-  it('carets a prerelease version rather than leaving it an exact pin', () => {
-    // ^1.0.0-beta.1 only matches later prereleases within 1.0.0 plus the
-    // eventual stable 1.0.0 release — narrower than a normal caret range,
-    // but that's inherent to npm semver's prerelease-tuple rule, not a bug.
-    expect(toFloorRange('1.0.0-beta.1')).toBe('^1.0.0-beta.1');
+  it('floors a 0.x version with >=, not caret (caret is inert/too-tight below 1.0.0)', () => {
+    // ^0.0.3 expands to ">=0.0.3 <0.0.4-0" — exactly one version, i.e. an
+    // exact pin wearing a caret costume. >=0.0.3 has no such ceiling.
+    expect(toFloorRange('0.0.3')).toBe('>=0.0.3');
+    // ^0.5.1 caps at <0.6.0-0, but 0.x treats the minor as the breaking
+    // axis, so that cap is still too tight for a security floor.
+    expect(toFloorRange('0.5.1')).toBe('>=0.5.1');
+  });
+
+  it('floors a normal >=1.0.0 version with >=, matching the repo convention', () => {
+    // Consistent with this repo's own hand-written overrides
+    // (esbuild: ">=0.28.1", qs, hono, ws).
+    expect(toFloorRange('8.5.26')).toBe('>=8.5.26');
+  });
+
+  it('floors a prerelease version rather than leaving it an exact pin', () => {
+    expect(toFloorRange('1.0.0-beta.1')).toBe('>=1.0.0-beta.1');
   });
 
   it('leaves an already-range value alone', () => {
@@ -115,7 +130,7 @@ describe('applyOverrides', () => {
   ];
 
   for (const { pm, overridesPath } of pkgManagers) {
-    it(`writes a caret floor (^x.y.z) for a concrete target under ${pm}`, async () => {
+    it(`writes a >= floor for a concrete target under ${pm}`, async () => {
       const dir = makeTmpDir(`hexops-apply-${pm}-`);
       writePkgJson(dir, { name: 'proj', version: '1.0.0' });
 
@@ -126,11 +141,11 @@ describe('applyOverrides', () => {
       expect(results[0].success).toBe(true);
 
       const pkgJson = readPkgJson(dir);
-      expect(overridesPath(pkgJson)?.postcss).toBe('^8.5.26');
+      expect(overridesPath(pkgJson)?.postcss).toBe('>=8.5.26');
     });
   }
 
-  it('writes a dist-tag target through unchanged (cannot caret a tag)', async () => {
+  it('writes a dist-tag target through unchanged (cannot floor a tag)', async () => {
     const dir = makeTmpDir('hexops-apply-tag-');
     writePkgJson(dir, { name: 'proj', version: '1.0.0' });
 
@@ -150,7 +165,7 @@ describe('applyOverrides', () => {
     await applyOverrides(pkgs, 'npm', dir, 'test-project');
 
     const pkgJson = readPkgJson(dir);
-    expect(pkgJson.dependencies!.postcss).toBe('^8.5.26');
+    expect(pkgJson.dependencies!.postcss).toBe('>=8.5.26');
   });
 
   it('does not warn when the resolved version satisfies the floor but is not an exact match', async () => {
@@ -166,6 +181,40 @@ describe('applyOverrides', () => {
     expect(results[0].output).not.toMatch(/resolved to .* may need lockfile reset/);
   });
 
+  it('WARNS when the installed version does not satisfy the written floor (resolved lower than target)', async () => {
+    const dir = makeTmpDir('hexops-apply-mismatch-low-');
+    writePkgJson(dir, { name: 'proj', version: '1.0.0' });
+    // The resolver picked something below the floor — a genuine mismatch
+    // that must still be caught (project issue #126: a bare >= previously
+    // failed to move the resolved version under pnpm's node-linker=hoisted,
+    // and this warning is the only thing that surfaces that).
+    writeInstalledVersion(dir, 'postcss', '8.5.20');
+
+    const pkgs: UpdatePackage[] = [{ name: 'postcss', fromVersion: '8.5.15', targetVersion: '8.5.26' }];
+    const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+    expect(results[0].output).toMatch(/resolved to 8\.5\.20 — may need lockfile reset/);
+  });
+
+  it('WARNS on a mismatch a bare "installed >= target" scalar check would have missed', async () => {
+    const dir = makeTmpDir('hexops-apply-mismatch-tuple-');
+    writePkgJson(dir, { name: 'proj', version: '1.0.0' });
+    // 2.0.0-alpha.1 is numerically greater than 1.0.0-beta.1 under a plain
+    // semver.gte scalar comparison, so a check of that shape would have
+    // reported success. It does NOT satisfy the >=1.0.0-beta.1 range that
+    // was actually written (npm semver's prerelease-tuple rule excludes a
+    // prerelease of a different [major,minor,patch] from an unbounded >=
+    // range whose only prerelease comparator is 1.0.0-beta.1) — and that's
+    // the real question: did the override we wrote take effect, not
+    // whether the installed version happens to look "bigger".
+    writeInstalledVersion(dir, 'weird-pkg', '2.0.0-alpha.1');
+
+    const pkgs: UpdatePackage[] = [{ name: 'weird-pkg', targetVersion: '1.0.0-beta.1' }];
+    const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+    expect(results[0].output).toMatch(/resolved to 2\.0\.0-alpha\.1 — may need lockfile reset/);
+  });
+
   it('preserves the project package.json indentation style', async () => {
     const dir = makeTmpDir('hexops-apply-indent-');
     // 4-space indent, deliberately different from the writer's default.
@@ -177,6 +226,52 @@ describe('applyOverrides', () => {
     const raw = readPkgJsonRaw(dir);
     expect(raw).toMatch(/^ {4}"name"/m);
   });
+
+  describe('install failure handling (the anyResolved fallback)', () => {
+    it('reports failure — does not swallow it — when install fails and nothing on disk satisfies the target', async () => {
+      const dir = makeTmpDir('hexops-apply-failhard-');
+      writePkgJson(dir, { name: 'proj', version: '1.0.0' });
+      execAsyncMock.mockRejectedValueOnce({ stdout: '', stderr: 'network error', message: 'Command failed' });
+
+      const pkgs: UpdatePackage[] = [{ name: 'postcss', fromVersion: '8.5.15', targetVersion: '8.5.26' }];
+      const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+      expect(results[0].success).toBe(false);
+      expect(results[0].error).toMatch(/Failed to apply override/);
+    });
+
+    it('does not let a pre-existing copy that already satisfies the target mask a failed install', async () => {
+      const dir = makeTmpDir('hexops-apply-failswallow-');
+      writePkgJson(dir, { name: 'proj', version: '1.0.0' });
+      // The tree already had a version that would satisfy the NEW target's
+      // written range before this call ever ran — installed === fromVersion,
+      // so this is stale, not evidence the failed install actually applied
+      // the override. Without the fromVersion guard, "installed >= target"
+      // would have been true here and silently reported success.
+      writeInstalledVersion(dir, 'postcss', '9.0.0');
+      execAsyncMock.mockRejectedValueOnce({ stdout: '', stderr: 'registry 503', message: 'Command failed' });
+
+      const pkgs: UpdatePackage[] = [{ name: 'postcss', fromVersion: '9.0.0', targetVersion: '8.5.26' }];
+      const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+      expect(results[0].success).toBe(false);
+    });
+
+    it('still recovers when install errors but the target package genuinely resolved to something new', async () => {
+      const dir = makeTmpDir('hexops-apply-failrecover-');
+      writePkgJson(dir, { name: 'proj', version: '1.0.0' });
+      // Differs from fromVersion, so this is real evidence of a completed
+      // resolution (e.g. a post-install script warning failed the overall
+      // command even though the dependency graph itself resolved fine).
+      writeInstalledVersion(dir, 'postcss', '8.5.30');
+      execAsyncMock.mockRejectedValueOnce({ stdout: '', stderr: 'postinstall script warning', message: 'Command failed' });
+
+      const pkgs: UpdatePackage[] = [{ name: 'postcss', fromVersion: '8.5.15', targetVersion: '8.5.26' }];
+      const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+      expect(results[0].success).toBe(true);
+    });
+  });
 });
 
 describe('removeOverrideConflicts', () => {
@@ -186,22 +281,35 @@ describe('removeOverrideConflicts', () => {
 
   it('KEEPS an override whose range already satisfies the new target (the floor-deletion regression)', () => {
     const dir = makeTmpDir('hexops-conflicts-keep-');
-    writePkgJson(dir, { name: 'proj', pnpm: { overrides: { postcss: '^8.5.23' } } });
+    writePkgJson(dir, { name: 'proj', pnpm: { overrides: { postcss: '>=8.5.23' } } });
 
     const directPkgs: UpdatePackage[] = [{ name: 'postcss', targetVersion: '8.5.26' }];
     removeOverrideConflicts(pkgJsonPathFor(dir), directPkgs, 'pnpm', 'test-project');
 
     const pkgJson = readPkgJson(dir);
-    expect(pkgJson.pnpm!.overrides!.postcss).toBe('^8.5.23');
+    expect(pkgJson.pnpm!.overrides!.postcss).toBe('>=8.5.23');
+  });
+
+  it('KEEPS a >= floor even for a target in a later major (no caret ceiling to trip over)', () => {
+    const dir = makeTmpDir('hexops-conflicts-keep-major-');
+    writePkgJson(dir, { name: 'proj', pnpm: { overrides: { postcss: '>=8.5.23' } } });
+
+    // This is exactly the case a caret floor could NOT have kept: a fix
+    // landing in a later major. >= has no ceiling, so it still satisfies.
+    const directPkgs: UpdatePackage[] = [{ name: 'postcss', targetVersion: '9.1.0' }];
+    removeOverrideConflicts(pkgJsonPathFor(dir), directPkgs, 'pnpm', 'test-project');
+
+    const pkgJson = readPkgJson(dir);
+    expect(pkgJson.pnpm!.overrides!.postcss).toBe('>=8.5.23');
   });
 
   it('REMOVES an override whose range does not satisfy the new target', () => {
     const dir = makeTmpDir('hexops-conflicts-remove-');
-    writePkgJson(dir, { name: 'proj', pnpm: { overrides: { postcss: '^8.5.23' } } });
+    writePkgJson(dir, { name: 'proj', pnpm: { overrides: { postcss: '>=8.5.23' } } });
 
-    // Major bump falls outside the caret range — the override would now
-    // conflict with (block) the direct update, so it must go.
-    const directPkgs: UpdatePackage[] = [{ name: 'postcss', targetVersion: '9.0.0' }];
+    // A lower target than the floor's base falls outside the range — the
+    // override would now conflict with (block) the direct update.
+    const directPkgs: UpdatePackage[] = [{ name: 'postcss', targetVersion: '8.5.0' }];
     removeOverrideConflicts(pkgJsonPathFor(dir), directPkgs, 'pnpm', 'test-project');
 
     const pkgJson = readPkgJson(dir);
@@ -210,7 +318,7 @@ describe('removeOverrideConflicts', () => {
 
   it('REMOVES on a floating dist-tag target regardless of the existing range', () => {
     const dir = makeTmpDir('hexops-conflicts-floating-');
-    writePkgJson(dir, { name: 'proj', overrides: { postcss: '^8.5.23' } });
+    writePkgJson(dir, { name: 'proj', overrides: { postcss: '>=8.5.23' } });
 
     const directPkgs: UpdatePackage[] = [{ name: 'postcss', targetVersion: 'latest' }];
     removeOverrideConflicts(pkgJsonPathFor(dir), directPkgs, 'npm', 'test-project');
@@ -230,6 +338,53 @@ describe('removeOverrideConflicts', () => {
     expect(pkgJson.resolutions!.postcss).toBeUndefined();
   });
 
+  it('does not throw on non-semver pinned values (workspace protocol, git URL, npm alias)', () => {
+    const dir = makeTmpDir('hexops-conflicts-nonsemver-');
+    writePkgJson(dir, {
+      name: 'proj',
+      pnpm: { overrides: { a: 'workspace:*' } },
+      overrides: { b: 'git+https://github.com/x/y.git' },
+      resolutions: { c: 'npm:alias@1.0.0' },
+    });
+
+    const pnpmPkgs: UpdatePackage[] = [{ name: 'a', targetVersion: '1.2.3' }];
+    const npmPkgs: UpdatePackage[] = [{ name: 'b', targetVersion: '1.2.3' }];
+    const yarnPkgs: UpdatePackage[] = [{ name: 'c', targetVersion: '1.2.3' }];
+
+    expect(() => removeOverrideConflicts(pkgJsonPathFor(dir), pnpmPkgs, 'pnpm', 'test-project')).not.toThrow();
+    expect(() => removeOverrideConflicts(pkgJsonPathFor(dir), npmPkgs, 'npm', 'test-project')).not.toThrow();
+    expect(() => removeOverrideConflicts(pkgJsonPathFor(dir), yarnPkgs, 'yarn', 'test-project')).not.toThrow();
+
+    // Neither side parses as semver, so it falls back to strict string
+    // comparison — all three differ from the new target, so all three are
+    // removed (the pre-floor behavior, preserved as the safe fallback).
+    const pkgJson = readPkgJson(dir);
+    expect(pkgJson.pnpm!.overrides!.a).toBeUndefined();
+    expect(pkgJson.overrides!.b).toBeUndefined();
+    expect(pkgJson.resolutions!.c).toBeUndefined();
+  });
+
+  it('always keeps a wildcard ("*") or empty-string override (harmless but previously untested)', () => {
+    const dir = makeTmpDir('hexops-conflicts-wildcard-');
+    writePkgJson(dir, { name: 'proj', pnpm: { overrides: { a: '*', b: '' } } });
+
+    const directPkgs: UpdatePackage[] = [
+      { name: 'a', targetVersion: '8.5.26' },
+      { name: 'b', targetVersion: '9.0.0' },
+    ];
+    removeOverrideConflicts(pkgJsonPathFor(dir), directPkgs, 'pnpm', 'test-project');
+
+    // semver parses both "*" and "" as an "any version" range, so any
+    // concrete target always satisfies them — never a conflict, never
+    // removed. Behavior change from the old exact-string-equality check
+    // (which would have removed both, since neither equals the target
+    // string), but a harmless one: a wildcard/empty override was never a
+    // meaningful pin to begin with.
+    const pkgJson = readPkgJson(dir);
+    expect(pkgJson.pnpm!.overrides!.a).toBe('*');
+    expect(pkgJson.pnpm!.overrides!.b).toBe('');
+  });
+
   it('preserves package.json indentation when it rewrites the file', () => {
     const dir = makeTmpDir('hexops-conflicts-indent-');
     writePkgJson(dir, { name: 'proj', overrides: { postcss: '8.5.15' } }, 4);
@@ -245,13 +400,13 @@ describe('removeOverrideConflicts', () => {
 describe('cleanStaleOverrides', () => {
   it('leaves a range-valued override untouched even when installed resolves higher', () => {
     const dir = makeTmpDir('hexops-stale-range-');
-    writePkgJson(dir, { name: 'proj', pnpm: { overrides: { postcss: '^8.5.23' } } });
+    writePkgJson(dir, { name: 'proj', pnpm: { overrides: { postcss: '>=8.5.23' } } });
     writeInstalledVersion(dir, 'postcss', '8.5.30');
 
     cleanStaleOverrides(dir, 'pnpm', 'test-project');
 
     const pkgJson = readPkgJson(dir);
-    expect(pkgJson.pnpm!.overrides!.postcss).toBe('^8.5.23');
+    expect(pkgJson.pnpm!.overrides!.postcss).toBe('>=8.5.23');
   });
 
   it('still removes a genuinely stale exact pin', () => {
