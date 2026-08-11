@@ -16,7 +16,7 @@ import { checkNodeModulesHealth, cleanNodeModules } from '@/lib/updaters/npm';
 import { checkPnpmLockfileHealth, repairPnpmLockfile, buildPnpmUpdateCmd } from '@/lib/updaters/pnpm';
 import { buildNpmUpdateCmd } from '@/lib/updaters/npm';
 import { buildYarnUpdateCmd } from '@/lib/updaters/yarn';
-import { applyOverrides, removeOverrideConflicts, cleanStaleOverrides, findAllInstalledVersions, pickPrimaryVersion } from '@/lib/updaters/override';
+import { applyOverrides, removeOverrideConflicts, cleanStaleOverrides, findAllInstalledVersions, pickLowestVersion } from '@/lib/updaters/override';
 import { installPackages } from '@/lib/updaters/install';
 import { execAsync } from '@/lib/updaters/common';
 import { SECURITY_PLUGINS } from '@/lib/security/plugins';
@@ -172,8 +172,19 @@ export async function POST(
             // in turn leaves the stale-tree guard in applyOverrides inert.
             // Reuse the same lookup (root, then .pnpm store) rather than
             // duplicating a second, narrower version of it here.
-            const { root, all } = findAllInstalledVersions(cwd, pkg.name);
-            effectiveFromVersion = pickPrimaryVersion(root, all) || '';
+            //
+            // Deliberately pickLowestVersion, NOT pickPrimaryVersion: this
+            // feeds the downgrade guard below, whose job is "is anything
+            // still below target" — the worst case across every copy — not
+            // "what's the one representative version". Feeding it the
+            // highest copy is actively wrong on a multi-copy isolated
+            // layout: a vulnerable 8.4.31 sitting next to a clean 8.5.30,
+            // against a target of 8.5.26, would read as "already past this
+            // fix" from the 8.5.30 copy and refuse the whole update —
+            // leaving the vulnerable 8.4.31 untouched. Refuse only when
+            // EVERY copy is already at or above the target.
+            const { all } = findAllInstalledVersions(cwd, pkg.name);
+            effectiveFromVersion = pickLowestVersion(all) || '';
           } catch { /* fall through */ }
         }
         if (effectiveFromVersion && !/^(latest|next|canary|resolve-latest)$/.test(targetVersion)) {

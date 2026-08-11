@@ -88,34 +88,63 @@ function findViolatingVersions(installedVersions: string[], targetVersion: strin
 
 /**
  * Pick a single representative version out of a set of discovered copies —
- * used both to report "what resolved" after an override and to read "what's
- * currently installed" before one. Prefers the root copy when it's a
- * parseable version (most representative of what a plain
- * `node_modules/<pkg>` look would show); otherwise the highest of the
+ * used to report "what resolved" after an override once every copy has
+ * already been confirmed to satisfy the floor (see the verify loop in
+ * `applyOverrides`; callers that need "is anything still below a target" —
+ * a downgrade guard — must use `pickLowestVersion` on the full set instead,
+ * not this function: they ask a different question, and this one answering
+ * "highest" would silently paper over a still-vulnerable copy). Prefers the
+ * root copy when it's a parseable version (most representative of what a
+ * plain `node_modules/<pkg>` look would show); otherwise the highest of the
  * remaining copies.
  *
- * Filters to parseable semver BEFORE sorting, and does not trust `root`
- * blindly either. This matters: `semver.rcompare`/`semver.compare` and
- * `semver.major` all THROW on an unparseable version, while
- * `Array.prototype.sort` never invokes its comparator for a single-element
- * array — so a lone garbage `version` field was silently accepted and only
- * a *second*, differently-shaped copy would trigger the throw. That throw
- * was getting swallowed by this file's catch-all, discarding every
- * already-computed violating version along with it and leaving
- * `resolvedVersion: undefined`, `success: true`, no warning at all — worse
- * than the pre-fix `existsSync` no-op, because the violating versions were
- * in hand and got thrown away instead of reported.
+ * Filters to parseable semver BEFORE sorting — with the loose flag passed
+ * through to BOTH the filter and the sort comparator, not just the filter.
+ * That distinction matters on its own: `semver.valid(v, {loose:true})`
+ * accepts version strings (`1.02.3`, leading zeros; `=1.2.3`, an equals
+ * prefix; `1.2.3-beta.01`, a leading-zero prerelease segment) that
+ * `semver.compare`/`semver.rcompare` — called bare, as a `.sort()`
+ * comparator, which invokes them with exactly two arguments and so never
+ * passes `loose` — reject and THROW on. A version that passes the loose
+ * filter but hits the strict sort would throw regardless of which end
+ * (`pickLowestVersion` or this function) picked it.
+ *
+ * Also: `Array.prototype.sort` never invokes its comparator for a
+ * single-element array, so a lone garbage `version` field was always
+ * silently accepted, and only a *second*, differently-shaped copy would
+ * ever trigger the throw — which is why single-copy tests alone can't
+ * catch this class of bug. Any throw here would be caught by this file's
+ * outer catch-all, discarding an already-computed violation report along
+ * with it (see the caller in `applyOverrides`, which computes and logs the
+ * violation warning *before* calling into version selection for exactly
+ * this reason — so a throw during selection can no longer un-report a
+ * violation that was already detected and logged).
  */
 export function pickPrimaryVersion(root: string | undefined, all: string[]): string | undefined {
   if (root && semver.valid(root, { loose: true })) return root;
   const parseable = all.filter(v => semver.valid(v, { loose: true }));
-  return parseable.length > 0 ? parseable.slice().sort(semver.rcompare)[0] : undefined;
+  return parseable.length > 0 ? parseable.slice().sort((a, b) => semver.rcompare(a, b, { loose: true }))[0] : undefined;
 }
 
-/** The lowest (most vulnerable) parseable version among a set — used to report a representative offender when copies violate the floor. */
-function worstVersion(versions: string[]): string | undefined {
+/**
+ * The lowest parseable version among a set of discovered copies. Used both
+ * to report a representative offender when copies violate a floor, and — by
+ * `route.ts`, for the pre-install downgrade guard — to answer "is anything
+ * still below the target", which requires the WORST case among all copies,
+ * not `pickPrimaryVersion`'s root-or-highest answer. Feeding a downgrade
+ * guard the highest copy is actively wrong: on an isolated pnpm layout with
+ * a vulnerable copy at 8.4.31 and a clean one at 8.5.30 against a target of
+ * 8.5.26, the highest copy (8.5.30) reads as "already past this fix" and
+ * refuses the entire update — the exact issue-#80 multi-copy shape this
+ * effort exists to catch, except now refusing to even attempt the fix
+ * rather than merely failing to verify it.
+ *
+ * Same loose-in-both-filter-and-sort treatment as `pickPrimaryVersion`, for
+ * the same reason (see that function's doc comment).
+ */
+export function pickLowestVersion(versions: string[]): string | undefined {
   const parseable = versions.filter(v => semver.valid(v, { loose: true }));
-  return parseable.length > 0 ? parseable.slice().sort(semver.compare)[0] : undefined;
+  return parseable.length > 0 ? parseable.slice().sort((a, b) => semver.compare(a, b, { loose: true }))[0] : undefined;
 }
 
 function readVersionField(pkgJsonPath: string): string | undefined {
@@ -564,20 +593,26 @@ export async function applyOverrides(
           const violating = findViolatingVersions(probe.versions, pkg.targetVersion);
 
           if (violating.length > 0) {
-            // Report the worst (most vulnerable) violator as the
-            // structured resolvedVersion, not the best-looking copy — a
-            // consumer filtering history on this field should see the
-            // problem, not a false clear. pickPrimaryVersion/worstVersion
-            // both filter to parseable semver before sorting: an
-            // unparseable `version` field must not crash this block and
-            // silently discard every violation already found (see the
-            // pickPrimaryVersion doc comment for how that happened before).
-            resolvedVersion = worstVersion(violating);
+            // Assign the warning and log it BEFORE computing resolvedVersion
+            // below. This ordering is the structural fix, not just the loose
+            // flag on the sort: version selection can still throw on input
+            // this file hasn't anticipated, and if that throw happened
+            // before the violation was reported, it would propagate to the
+            // outer catch-all and discard the violation report along with
+            // it — silent `success: true`, no warning, nothing, despite the
+            // violating versions having already been found. Reporting the
+            // violation first means a subsequent throw can only cost the
+            // structured `resolvedVersion` field, never the warning itself.
             verifyWarning = ` ⚠ override written but ${pkg.name} resolved to ${violating.join(', ')} (does not satisfy ${writtenRange}) — may need lockfile reset`;
             logger.warn('patches', 'override_version_mismatch', `Override for ${pkg.name}: expected ${writtenRange}, found violating cop${violating.length === 1 ? 'y' : 'ies'}: ${violating.join(', ')}`, {
               projectId,
               meta: { package: pkg.name, expected: pkg.targetVersion, writtenRange, violatingVersions: violating, allVersions: probe.versions },
             });
+            // Report the worst (most vulnerable) violator as the structured
+            // resolvedVersion, not the best-looking copy — a consumer
+            // filtering history on this field should see the problem, not a
+            // false clear.
+            resolvedVersion = pickLowestVersion(violating);
           } else {
             resolvedVersion = pickPrimaryVersion(probe.root, probe.versions);
           }

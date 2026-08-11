@@ -38,7 +38,7 @@ vi.mock('@/lib/updaters/override', () => ({
   removeOverrideConflicts: vi.fn(),
   cleanStaleOverrides: vi.fn(),
   findAllInstalledVersions: vi.fn().mockReturnValue({ root: undefined, all: [] }),
-  pickPrimaryVersion: vi.fn().mockReturnValue(undefined),
+  pickLowestVersion: vi.fn().mockReturnValue(undefined),
 }));
 vi.mock('@/lib/updaters/install', () => ({ installPackages: vi.fn() }));
 

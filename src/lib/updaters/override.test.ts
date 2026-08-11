@@ -44,8 +44,19 @@ vi.mock('@/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-import { applyOverrides, removeOverrideConflicts, cleanStaleOverrides, toFloorRange } from './override';
+import { applyOverrides, removeOverrideConflicts, cleanStaleOverrides, toFloorRange, findAllInstalledVersions, pickPrimaryVersion, pickLowestVersion } from './override';
 import { logger } from '@/lib/logger';
+
+// Mirrors route.ts's downgrade-guard arithmetic exactly (see
+// src/app/api/projects/[id]/update/route.ts, the `isDowngrade` computation
+// fed by `effectiveFromVersion`) — kept in lockstep on purpose so the B1
+// pinning test below proves the guard's actual behavior, not a paraphrase
+// of it.
+function isDowngrade(fromVersion: string, targetVersion: string): boolean {
+  const fv = fromVersion.replace(/^[\^~]/, '').split('.').map(n => parseInt(n, 10) || 0);
+  const tv = targetVersion.replace(/^[\^~]/, '').split('.').map(n => parseInt(n, 10) || 0);
+  return fv[0] > tv[0] || (fv[0] === tv[0] && fv[1] > tv[1]) || (fv[0] === tv[0] && fv[1] === tv[1] && (fv[2] ?? 0) > (tv[2] ?? 0));
+}
 
 const dirs: string[] = [];
 function makeTmpDir(prefix: string): string {
@@ -312,6 +323,55 @@ describe('applyOverrides', () => {
       expect(results[0].resolvedVersion).toBe('8.4.31');
     });
 
+    it('B1 regression: a route-level downgrade guard fed the LOWEST copy does not refuse an update a HIGHEST-copy guard would wrongly refuse', async () => {
+      // Reproduces the exact scenario a round-4 fix (F4: route.ts reading
+      // effectiveFromVersion via the isolated-linker-aware lookup) broke:
+      // no root copy, a vulnerable copy and a clean copy coexisting in the
+      // .pnpm store, target sitting between them. route.ts's downgrade
+      // guard must be fed the LOWEST copy (pickLowestVersion) — feeding it
+      // the highest (what pickPrimaryVersion, or the old root-preferring
+      // logic, would return) makes the guard refuse the whole update as
+      // "already past this fix" while the vulnerable copy survives
+      // untouched. That's worse than the pre-round-3 behavior, where a
+      // root-only read returned '' and the guard was simply inert.
+      const dir = makeTmpDir('hexops-b1-downgrade-guard-');
+      writePkgJson(dir, { name: 'proj', version: '1.0.0', dependencies: { next: '16.3.0' } });
+      writePnpmStoreVersion(dir, 'postcss', '8.4.31'); // vulnerable
+      writePnpmStoreVersion(dir, 'postcss', '8.5.30', '_react@19.2.7'); // clean
+
+      const target = '8.5.26';
+      const { root, all } = findAllInstalledVersions(dir, 'postcss');
+      expect(root).toBeUndefined(); // no root copy — the isolated-linker case
+
+      // The regression: pickPrimaryVersion (root-or-highest) picks the
+      // CLEAN copy, and feeding that into the guard falsely refuses.
+      const wronglyPicked = pickPrimaryVersion(root, all);
+      expect(wronglyPicked).toBe('8.5.30');
+      expect(isDowngrade(wronglyPicked!, target)).toBe(true); // <- the bug: would refuse
+
+      // The fix: pickLowestVersion (worst case across every copy) picks the
+      // VULNERABLE copy, and feeding that into the same guard does not
+      // refuse — there's still a copy below target, so the update must be
+      // allowed to proceed.
+      const correctlyPicked = pickLowestVersion(all);
+      expect(correctlyPicked).toBe('8.4.31');
+      expect(isDowngrade(correctlyPicked!, target)).toBe(false); // <- not refused
+
+      // End-to-end: with the guard correctly not refusing, the request
+      // reaches applyOverrides, and the override IS written — the
+      // regression's whole point was that it never got this far.
+      const pkgs: UpdatePackage[] = [{ name: 'postcss', fromVersion: correctlyPicked, targetVersion: target }];
+      const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+      expect(results[0].success).toBe(true);
+      const pkgJson = readPkgJson(dir);
+      expect(pkgJson.pnpm!.overrides!.postcss).toBe('>=8.5.26');
+      // applyOverrides' own (separate, more thorough) verification still
+      // correctly flags the vulnerable copy still sitting in the store —
+      // the route-level guard's job was only to not block the attempt.
+      expect(results[0].output).toMatch(/resolved to 8\.4\.31 \(does not satisfy >=8\.5\.26\) — may need lockfile reset/);
+    });
+
     it('does not silently discard violations when one of the copies has an unparseable version field', async () => {
       const dir = makeTmpDir('hexops-apply-pnpmstore-garbage-');
       writePkgJson(dir, { name: 'proj', version: '1.0.0' });
@@ -337,6 +397,43 @@ describe('applyOverrides', () => {
         expect.any(String),
         expect.objectContaining({ meta: expect.objectContaining({ package: 'weird' }) }),
       );
+    });
+
+    it('B2 regression: a loose-parseable/strict-invalid version does not silently swallow a violation', async () => {
+      // `semver.valid(v, {loose:true})` accepts "1.02.3" (a leading zero in
+      // the minor segment), but `semver.compare`/`semver.rcompare` called
+      // bare as a .sort() comparator run WITHOUT the loose flag and throw on
+      // it. Two copies is what triggers the throw (a lone element never
+      // invokes the sort comparator) — verified directly against the real
+      // semver package before writing this test:
+      //   semver.valid('1.02.3', {loose:true})        -> '1.2.3' (accepted)
+      //   ['1.02.3','1.5.0'].sort(semver.compare)      -> throws
+      //   ['1.02.3','1.5.0'].sort((a,b)=>semver.compare(a,b,{loose:true})) -> fine
+      // Both copies violate the target here, so this pins the structural
+      // fix too: the warning must fire even if version SELECTION afterward
+      // throws, because the warning is now assigned before selection runs.
+      const dir = makeTmpDir('hexops-b2-loose-strict-');
+      writePkgJson(dir, { name: 'proj', version: '1.0.0' });
+      writePnpmStoreVersion(dir, 'loosepkg', '1.02.3');
+      writePnpmStoreVersion(dir, 'loosepkg', '1.5.0', '_extra');
+
+      const pkgs: UpdatePackage[] = [{ name: 'loosepkg', targetVersion: '2.0.0' }];
+      const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+      // No silent success: the mismatch warning must fire for real, not get
+      // swallowed by a version-selection throw.
+      expect(results[0].success).toBe(true); // a floor violation still isn't a hard failure
+      expect(results[0].output).toMatch(/may need lockfile reset/);
+      expect(logger.warn).toHaveBeenCalledWith(
+        'patches',
+        'override_version_mismatch',
+        expect.any(String),
+        expect.objectContaining({ meta: expect.objectContaining({ package: 'loosepkg' }) }),
+      );
+      // With the loose flag now passed to the sort comparator too, version
+      // selection succeeds rather than throwing, so the structured field is
+      // populated with the worse of the two violators.
+      expect(results[0].resolvedVersion).toBe('1.02.3');
     });
 
     it('does not throw when a lone unparseable version field is the ONLY copy found', async () => {
