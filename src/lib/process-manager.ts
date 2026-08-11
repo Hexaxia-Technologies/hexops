@@ -215,7 +215,15 @@ export function startProject(
     child.on('close', (code, signal) => {
       const intentional = stoppingProjects.has(project.id);
       stoppingProjects.delete(project.id);
-      activeProcesses.delete(project.id);
+      // Guard by identity (review finding M1): activeProcesses can already
+      // hold a *different*, newer child for this projectId by the time a
+      // stale 'close' fires (e.g. this child was killed via the port-based
+      // fallback rather than through its own ChildProcess handle, and a
+      // fresh start happened before the OS finished reaping it). Deleting
+      // unconditionally would untrack the replacement out from under it.
+      if (activeProcesses.get(project.id)?.process === child) {
+        activeProcesses.delete(project.id);
+      }
 
       const isCrash = !intentional && code !== 0;
 
@@ -294,13 +302,25 @@ export function startProject(
 const STOP_SIGTERM_TIMEOUT_MS = 4000;
 const STOP_SIGKILL_TIMEOUT_MS = 1500;
 const STOP_POLL_INTERVAL_MS = 150;
-const STOP_PORT_CHECK_TIMEOUT_MS = 300;
+// A grace period for the *process* (not the port) to actually exit once its
+// port is confirmed free — see waitUntilProcessExited / M3 below.
+const STOP_PROCESS_EXIT_GRACE_MS = 500;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Poll checkPort until it reports the port free, or timeoutMs elapses. */
+/**
+ * Poll checkPort until it reports the port free, or timeoutMs elapses.
+ *
+ * Deliberately does NOT pass a shortened timeout to checkPort (review
+ * finding M2): checkPort resolves `false` — "free" — on its own connect
+ * *timeout*, indistinguishable from a genuine connection refusal. A short
+ * per-attempt timeout here would let a slow-but-still-bound port read as
+ * released, which is a false-success path in exactly the function whose job
+ * is eliminating false successes. checkPort's 1000ms default is kept as-is;
+ * only the interval between polls is tuned.
+ */
 async function waitUntilPortFree(
   port: number,
   timeoutMs: number,
@@ -308,10 +328,26 @@ async function waitUntilPortFree(
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   // Always check at least once, even for a zero-length budget.
-  if (!(await checkPort(port, STOP_PORT_CHECK_TIMEOUT_MS))) return true;
+  if (!(await checkPort(port))) return true;
   while (Date.now() < deadline) {
     await sleep(pollIntervalMs);
-    if (!(await checkPort(port, STOP_PORT_CHECK_TIMEOUT_MS))) return true;
+    if (!(await checkPort(port))) return true;
+  }
+  return false;
+}
+
+/** Poll a tracked child's exitCode/signalCode until it has actually exited, or timeoutMs elapses. */
+async function waitUntilProcessExited(
+  child: ChildProcess,
+  timeoutMs: number,
+  pollIntervalMs: number = STOP_POLL_INTERVAL_MS
+): Promise<boolean> {
+  const exited = () => child.exitCode !== null || child.signalCode !== null;
+  const deadline = Date.now() + timeoutMs;
+  if (exited()) return true;
+  while (Date.now() < deadline) {
+    await sleep(pollIntervalMs);
+    if (exited()) return true;
   }
   return false;
 }
@@ -330,8 +366,13 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
  * A group/process that is already gone answers with ESRCH — that is treated
  * as "already stopped," not an error, and is swallowed here. Any other
  * failure (e.g. EPERM) is rethrown for the caller to log and route around.
+ *
+ * Exported (only) so unit tests can pin the ESRCH-vs-EPERM branches directly
+ * rather than through stopProject's mocked-checkPort flow, where both
+ * branches are observably identical (review finding M4). Not part of the
+ * intended public API of this module.
  */
-function signalProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+export function signalProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   const pid = child.pid;
   if (!pid) return;
 
@@ -358,7 +399,7 @@ function signalProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
  * still didn't free the port.
  */
 async function stopByPort(projectId: string, port: number): Promise<{ success: boolean; error?: string }> {
-  if (!(await checkPort(port, STOP_PORT_CHECK_TIMEOUT_MS))) {
+  if (!(await checkPort(port))) {
     return { success: true };
   }
 
@@ -378,14 +419,34 @@ async function stopByPort(projectId: string, port: number): Promise<{ success: b
       // ss may fail, which is fine
     }
 
+    let killedAny = false;
     for (const pid of pids) {
       // Validate pid is numeric before using
-      if (/^\d+$/.test(pid)) {
-        try {
-          execFileSync('kill', ['-9', pid]);
-        } catch {
-          // Ignore errors (process may have already exited)
-        }
+      if (!/^\d+$/.test(pid)) continue;
+
+      const numericPid = Number(pid);
+      // Ownership guard (review finding I1): this fallback previously ran
+      // only on a thrown error and never actually killed anything, so it
+      // never had a chance to hit hexops itself. Now that it's a real path
+      // reachable from a *tracked* stop whose group died but whose port is
+      // held by something else, refuse to touch hexops' own pid or its
+      // parent — a project misconfigured onto hexops' own port must not be
+      // able to make Stop kill hexops.
+      if (numericPid === process.pid || numericPid === process.ppid) {
+        addLogEntry(
+          projectId,
+          'stderr',
+          `[SYS] Refusing to kill pid ${pid} on port ${port} — it is hexops itself (or its parent)`
+        );
+        continue;
+      }
+
+      addLogEntry(projectId, 'stdout', `[SYS] Killing pid ${pid} found listening on port ${port}`);
+      try {
+        execFileSync('kill', ['-9', pid]);
+        killedAny = true;
+      } catch {
+        // Ignore errors (process may have already exited)
       }
     }
 
@@ -397,9 +458,9 @@ async function stopByPort(projectId: string, port: number): Promise<{ success: b
 
     return {
       success: false,
-      error: pids.length > 0
+      error: killedAny
         ? `Sent SIGKILL to pid(s) ${pids.join(', ')} on port ${port}, but the port is still bound`
-        : `No process found on port ${port} via ss, but the port is still bound`,
+        : `No killable process found on port ${port} via ss, but the port is still bound`,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -417,16 +478,26 @@ export async function stopProject(projectId: string, port: number): Promise<{ su
   const isLive = entry != null && entry.process.pid != null
     && entry.process.exitCode === null && entry.process.signalCode === null;
 
-  if (entry && isLive) {
-    // Mark this projectId as an intentional stop *before* signalling, since
-    // the child's 'close' handler can fire at any point during the awaits
-    // below and needs to see this to avoid treating it as a crash. Only set
-    // when there's a live tracked process — a 'close' event will eventually
-    // clean this back up. (Setting it unconditionally, including for the
-    // port-only fallback below, would leak forever for a projectId with no
-    // tracked entry, silently disabling crash detection on a later start.)
+  // Mark this projectId as an intentional stop whenever there's a tracked
+  // ChildProcess at all — not only a "live" one (review finding C2, fixing a
+  // regression from an earlier revision of this patch). A tracked child
+  // *always* has a 'close' event still coming, even if exitCode/signalCode
+  // already look set: with shell: true, Node holds 'close' until every
+  // stdio pipe finishes draining, and a grandchild that inherited those
+  // pipes while still holding the real port (exactly the #90 shape) can
+  // keep 'close' pending well after the direct child looks exited. If we
+  // only mark intentional for the "live" case, that pending close later
+  // fires with intentional=false — a false "crashed" notification, and if
+  // restartOnCrash is on, hexops relaunches the server the user just
+  // stopped. An entry with genuinely no ChildProcess (nothing tracked at
+  // all) has no 'close' coming, ever, for this stop — that's the leak this
+  // guard was originally added to avoid, and remains avoided since `entry`
+  // is undefined in that case.
+  if (entry) {
     stoppingProjects.add(projectId);
+  }
 
+  if (entry && isLive) {
     try {
       signalProcessGroup(entry.process, 'SIGTERM');
     } catch (error) {
@@ -448,6 +519,27 @@ export async function stopProject(projectId: string, port: number): Promise<{ su
     }
 
     if (portFreed) {
+      // Success is port-gated above, but we're holding a live ChildProcess
+      // handle — use it (review finding M3). A server that closes its
+      // listener and then hangs (rather than actually exiting) would read
+      // as "free" by port alone while the group is still alive. Give it a
+      // short grace window to actually exit; if it hasn't, finish the job
+      // with one more defensive SIGKILL rather than silently deleting the
+      // tracking entry out from under a process that's still running.
+      const exited = await waitUntilProcessExited(entry.process, STOP_PROCESS_EXIT_GRACE_MS);
+      if (!exited) {
+        addLogEntry(
+          projectId,
+          'stderr',
+          '[SYS] Port released but the process had not exited — sending a final defensive SIGKILL'
+        );
+        try {
+          signalProcessGroup(entry.process, 'SIGKILL');
+        } catch {
+          // best-effort; we've already committed to reporting success on
+          // the port contract below
+        }
+      }
       activeProcesses.delete(projectId);
       addLogEntry(projectId, 'stdout', '[SYS] Process stopped');
       return { success: true };
@@ -469,6 +561,56 @@ export async function stopProject(projectId: string, port: number): Promise<{ su
   }
   return fallback;
 }
+
+/**
+ * Signal every currently-tracked child's process group (review finding I3).
+ *
+ * Before #90, tracked children stayed in hexops's own foreground process
+ * group and session (`detached: false`), so a terminal Ctrl-C (SIGINT to the
+ * foreground group) or terminal close (SIGHUP to the session) reaped them
+ * along with hexops itself — no explicit cleanup code was needed. `detached:
+ * true` (the #90 fix) calls `setsid()`, which deliberately severs each
+ * tracked child into its own group *and* session so stopProject can signal
+ * it precisely — but that same severing means those signals no longer reach
+ * tracked children automatically. Without this, every tracked dev server
+ * would become an orphan the instant hexops exits via Ctrl-C, not just on a
+ * hexops crash. Exported so tests can call it directly without sending a
+ * real OS signal.
+ */
+export function shutdownTrackedProcesses(signal: NodeJS.Signals = 'SIGTERM'): void {
+  for (const [projectId, entry] of activeProcesses) {
+    try {
+      signalProcessGroup(entry.process, signal);
+      addLogEntry(projectId, 'stdout', `[SYS] hexops is shutting down (${signal}) — signalled tracked process group`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      addLogEntry(projectId, 'stderr', `[SYS] Failed to signal process group during shutdown: ${message}`);
+    }
+  }
+}
+
+// Wire shutdownTrackedProcesses to real OS signals, once, outside test runs.
+// Guarded by VITEST/NODE_ENV=test (both are how this module is imported
+// under the unit suite) so importing process-manager.ts in a test file never
+// installs a real process.on('SIGTERM', ...) handler that could call
+// process.exit() on a test worker — vitest's own pool workers are routinely
+// sent SIGTERM for perfectly normal lifecycle reasons (timeouts, --watch
+// restarts, teardown), and intercepting that would be its own hazard.
+const isTestEnv = process.env.VITEST === 'true' || process.env.NODE_ENV === 'test';
+let shutdownHandlersRegistered = false;
+function registerShutdownHandlers(): void {
+  if (shutdownHandlersRegistered || isTestEnv || process.platform === 'win32') return;
+  shutdownHandlersRegistered = true;
+  process.on('SIGINT', () => {
+    shutdownTrackedProcesses('SIGINT');
+    process.exit(130);
+  });
+  process.on('SIGTERM', () => {
+    shutdownTrackedProcesses('SIGTERM');
+    process.exit(143);
+  });
+}
+registerShutdownHandlers();
 
 // Strip ANSI escape codes for clean display
 function stripAnsi(str: string): string {
@@ -670,6 +812,24 @@ export async function runWithDevServerGuard<T>(
   // orchestrate: capture the mode before stopping, restore in finally
   const mode = deps.getMode(project.id);
   const stopResult = await deps.stop(project.id, project.port);
+
+  // Review finding I2: before #90, stopProject effectively always reported
+  // success (that was the bug), so a failed stop here was unreachable and
+  // this branch never mattered. Now it's real: running `operation` (an
+  // install) against a dev server that is still actually alive is exactly
+  // the hazard #109 exists to prevent (Turbopack loses node_modules/next
+  // mid-reinstall and dies). Abort before running it.
+  if (!stopResult.success) {
+    return {
+      decision: decision.action,
+      reason: `Could not stop the dev server before applying: ${stopResult.error ?? 'unknown error'}. Refusing to run the operation against a server that may still be live.`,
+      blocked: true,
+      ranOperation: false,
+      stopped: false,
+      restarted: false,
+    };
+  }
+
   let result: T | undefined;
   let restarted = false;
   let restartError: string | undefined;

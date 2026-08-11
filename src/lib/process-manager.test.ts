@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
+import type { ChildProcess } from 'child_process';
 import type { ProjectConfig } from './types';
 
 // ---------------------------------------------------------------------------
@@ -29,6 +30,8 @@ import {
   runWithDevServerGuard,
   startProject,
   stopProject,
+  signalProcessGroup,
+  shutdownTrackedProcesses,
   type DevServerGuardDeps,
 } from './process-manager';
 
@@ -169,6 +172,25 @@ describe('runWithDevServerGuard (#109)', () => {
     expect(out.restarted).toBe(false);
     expect(out.restartError).toBe('port in use');
   });
+
+  it('orchestrate: aborts (blocked, operation never runs) when stop fails to actually free the server (#90 review finding I2)', async () => {
+    // Before #90, stopProject effectively always reported success, so a
+    // failed stop here was unreachable. Now it's real: running an install
+    // against a dev server that may still be live is exactly the hazard
+    // #109 exists to prevent.
+    const deps = makeDeps({
+      isRunning: () => true,
+      stop: vi.fn(async () => ({ success: false, error: 'still bound after SIGKILL' })),
+    });
+    const op = vi.fn(async () => 'should never run');
+    const out = await runWithDevServerGuard(makeProject(), op, {}, deps);
+    expect(out.blocked).toBe(true);
+    expect(out.ranOperation).toBe(false);
+    expect(out.result).toBeUndefined();
+    expect(op).not.toHaveBeenCalled();
+    expect(deps.start).not.toHaveBeenCalled(); // never tries to restart something it never actually stopped
+    expect(out.reason).toContain('still bound after SIGKILL');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -199,11 +221,26 @@ class FakeChildProcess extends EventEmitter {
 }
 
 describe('stopProject (#90 — verify before reporting success)', () => {
+  // Structural safety net (review finding C1): a prior revision left one
+  // test with no mock on process.kill at all — after vi.restoreAllMocks()
+  // ran in the previous test's afterEach, that test's process.kill(-pid,
+  // 'SIGTERM'/'SIGKILL') calls hit the REAL syscall against a fabricated
+  // pid, on a box that runs ~35 real dev servers. Spying here, before any
+  // test body runs, means no test in this describe block can ever reach the
+  // real syscall — even one that forgets to stub it itself. Individual
+  // tests only ever call `.mockImplementation`/`.mockReturnValue` on this
+  // shared spy, never `vi.spyOn(process, 'kill')` again.
+  function spyOnProcessKill() {
+    return vi.spyOn(process, 'kill').mockReturnValue(true);
+  }
+  let processKillSpy: ReturnType<typeof spyOnProcessKill>;
+
   beforeEach(() => {
     spawnMock.mockReset();
     execFileSyncMock.mockReset();
     checkPortMock.mockReset();
     addNotificationMock.mockReset();
+    processKillSpy = spyOnProcessKill();
   });
 
   afterEach(() => {
@@ -231,20 +268,26 @@ describe('stopProject (#90 — verify before reporting success)', () => {
   });
 
   it('signals the whole process group (-pid), not the bare pid', async () => {
-    trackProject('group-signal', 4242);
+    const fake = trackProject('group-signal', 4242);
     checkPortMock.mockResolvedValue(false); // port already free once signalled
-    const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true);
+    processKillSpy.mockImplementation((_pid, signal) => {
+      if (signal === 'SIGTERM') fake.exitCode = 0; // simulate the real process actually exiting
+      return true;
+    });
 
     const result = await stopProject('group-signal', 3001);
 
     expect(result.success).toBe(true);
-    expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGTERM');
+    expect(processKillSpy).toHaveBeenCalledWith(-4242, 'SIGTERM');
   });
 
   it('returns success once the port is actually released after SIGTERM', async () => {
-    trackProject('freed', 7777);
+    const fake = trackProject('freed', 7777);
     checkPortMock.mockResolvedValue(false);
-    vi.spyOn(process, 'kill').mockReturnValue(true);
+    processKillSpy.mockImplementation(() => {
+      fake.exitCode = 0;
+      return true;
+    });
 
     const result = await stopProject('freed', 3001);
 
@@ -253,11 +296,15 @@ describe('stopProject (#90 — verify before reporting success)', () => {
 
   it('escalates to SIGKILL when the port is still bound after SIGTERM', async () => {
     vi.useFakeTimers();
-    trackProject('escalate', 5555);
+    const fake = trackProject('escalate', 5555);
     let bound = true;
     checkPortMock.mockImplementation(async () => bound);
-    const killSpy = vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
-      if (signal === 'SIGKILL') bound = false; // SIGKILL is what actually frees it
+    processKillSpy.mockImplementation((_pid, signal) => {
+      if (signal === 'SIGKILL') {
+        bound = false; // SIGKILL is what actually frees it
+        fake.exitCode = null;
+        fake.signalCode = 'SIGKILL';
+      }
       return true;
     });
 
@@ -265,8 +312,8 @@ describe('stopProject (#90 — verify before reporting success)', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     const result = await resultPromise;
 
-    expect(killSpy).toHaveBeenCalledWith(-5555, 'SIGTERM');
-    expect(killSpy).toHaveBeenCalledWith(-5555, 'SIGKILL');
+    expect(processKillSpy).toHaveBeenCalledWith(-5555, 'SIGTERM');
+    expect(processKillSpy).toHaveBeenCalledWith(-5555, 'SIGKILL');
     expect(result.success).toBe(true);
   });
 
@@ -275,6 +322,9 @@ describe('stopProject (#90 — verify before reporting success)', () => {
     trackProject('never-frees', 6666);
     checkPortMock.mockResolvedValue(true); // nothing ever frees it
     execFileSyncMock.mockReturnValue(''); // ss finds nothing either
+    // processKillSpy keeps its safe default from beforeEach (returns true,
+    // no side effects) — this test intentionally does not override it, to
+    // prove the describe-level default alone is what keeps it safe.
 
     const resultPromise = stopProject('never-frees', 3001);
     await vi.advanceTimersByTimeAsync(15_000);
@@ -282,26 +332,56 @@ describe('stopProject (#90 — verify before reporting success)', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBeTruthy();
+    expect(processKillSpy).toHaveBeenCalledWith(-6666, 'SIGTERM');
+    expect(processKillSpy).toHaveBeenCalledWith(-6666, 'SIGKILL');
   });
 
   it('treats ESRCH from the kill syscall as already-stopped, not a failure', async () => {
     trackProject('esrch', 8888);
     checkPortMock.mockResolvedValue(false); // consistent with the process already being gone
     const esrch = Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
-    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
+    processKillSpy.mockImplementation(() => {
       throw esrch;
     });
 
     const result = await stopProject('esrch', 3001);
 
     expect(result.success).toBe(true);
-    expect(killSpy).toHaveBeenCalledWith(-8888, 'SIGTERM');
+    expect(processKillSpy).toHaveBeenCalledWith(-8888, 'SIGTERM');
+  });
+
+  it('an EPERM on the tracked group kill does not crash stopProject — it logs and falls through to the port-based fallback', async () => {
+    // Review finding M4: ESRCH-swallowing was tested, but the "most
+    // dangerous" branch — a real signalling failure like EPERM — had no
+    // coverage at the stopProject level at all.
+    vi.useFakeTimers();
+    trackProject('eperm-fallback', 4444);
+    let bound = true;
+    checkPortMock.mockImplementation(async () => bound);
+    const eperm = Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    processKillSpy.mockImplementation(() => {
+      throw eperm;
+    });
+    execFileSyncMock.mockImplementation((cmd: string) => {
+      if (cmd === 'ss') return 'LISTEN 0 511 *:3001 *:* users:(("node",pid=4445,fd=19))';
+      if (cmd === 'kill') {
+        bound = false;
+        return '';
+      }
+      return '';
+    });
+
+    const resultPromise = stopProject('eperm-fallback', 3001);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await resultPromise;
+
+    expect(result.success).toBe(true);
+    expect(execFileSyncMock).toHaveBeenCalledWith('kill', ['-9', '4445']);
   });
 
   it('runs the port-based fallback when there is no tracked entry at all (e.g. an orphaned server)', async () => {
     let bound = true;
     checkPortMock.mockImplementation(async () => bound);
-    const killSpy = vi.spyOn(process, 'kill');
     execFileSyncMock.mockImplementation((cmd: string) => {
       if (cmd === 'ss') return 'LISTEN 0 511 *:3001 *:* users:(("node",pid=9999,fd=19))';
       if (cmd === 'kill') {
@@ -316,7 +396,7 @@ describe('stopProject (#90 — verify before reporting success)', () => {
     expect(result.success).toBe(true);
     expect(execFileSyncMock).toHaveBeenCalledWith('ss', expect.arrayContaining(['-tlnp']), expect.anything());
     expect(execFileSyncMock).toHaveBeenCalledWith('kill', ['-9', '9999']);
-    expect(killSpy).not.toHaveBeenCalled(); // no tracked group to signal — this is the port-only path
+    expect(processKillSpy).not.toHaveBeenCalled(); // no tracked group to signal — this is the port-only path
   });
 
   it('reports failure (not success) when the port-based fallback finds nothing and the port stays bound', async () => {
@@ -330,6 +410,22 @@ describe('stopProject (#90 — verify before reporting success)', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toBeTruthy();
+  });
+
+  it('refuses to kill hexops itself (or its parent) even if ss lists it on the port (review finding I1)', async () => {
+    vi.useFakeTimers();
+    checkPortMock.mockResolvedValue(true); // stays "bound" from hexops' own listener's point of view
+    execFileSyncMock.mockImplementation((cmd: string) => {
+      if (cmd === 'ss') return `LISTEN 0 511 *:3001 *:* users:(("node",pid=${process.pid},fd=19))`;
+      return '';
+    });
+
+    const resultPromise = stopProject('self-guard', 3001);
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await resultPromise;
+
+    expect(result.success).toBe(false);
+    expect(execFileSyncMock).not.toHaveBeenCalledWith('kill', expect.anything());
   });
 
   it('an untracked/orphan stop does not poison crash detection for a later real process with the same id', async () => {
@@ -351,5 +447,119 @@ describe('stopProject (#90 — verify before reporting success)', () => {
       severity: 'error',
       projectId: 'orphan-then-real',
     });
+  });
+
+  it('marks intentional even when the tracked child already looks exited but its close is still pending (review finding C2 regression)', async () => {
+    // With shell: true, the direct child (sh) can look exited while a
+    // grandchild that inherited its stdio pipes is still holding them open
+    // — and, in the real #90 shape, still holding the port. Node defers
+    // 'close' until those pipes finish draining. An earlier revision of this
+    // fix only marked stoppingProjects when the tracked entry was "live"
+    // (exitCode === null), so this exact routine case fell through
+    // unmarked: the pending close later fired with intentional=false — a
+    // false "crashed" notification, and with restartOnCrash on, hexops
+    // would relaunch the server the user had just deliberately stopped.
+    const fake = trackProject('exited-but-pending-close', 3333);
+    fake.exitCode = 1; // direct child already looks exited...
+
+    let bound = true;
+    checkPortMock.mockImplementation(async () => bound);
+    execFileSyncMock.mockImplementation((cmd: string) => {
+      if (cmd === 'ss') return 'LISTEN 0 511 *:3001 *:* users:(("node",pid=3334,fd=19))';
+      if (cmd === 'kill') {
+        bound = false;
+        return '';
+      }
+      return '';
+    });
+
+    const stopResult = await stopProject('exited-but-pending-close', 3001);
+    expect(stopResult.success).toBe(true);
+    // isLive was false, so the tracked signalling branch never ran — this
+    // was resolved entirely by the port-based fallback, exactly as it would
+    // be in the real grandchild-holds-the-port shape.
+    expect(processKillSpy).not.toHaveBeenCalled();
+
+    // ...and now its 'close' fires late, as it would for real once the
+    // grandchild's pipes finally drain. It must be read as intentional.
+    addNotificationMock.mockClear();
+    fake.emit('close', 1, null);
+    expect(addNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it('port released but the process itself has not exited yet: sends a defensive final SIGKILL rather than trusting the port alone (review finding M3)', async () => {
+    const fake = trackProject('hung-after-close', 5678);
+    checkPortMock.mockResolvedValue(false); // socket already released...
+    // ...but the process itself never actually exits (fake.exitCode stays
+    // null throughout) — e.g. it closed its listener but hung.
+    processKillSpy.mockReturnValue(true);
+
+    const result = await stopProject('hung-after-close', 3001);
+
+    expect(result.success).toBe(true); // #90's contract (port released) is still honored
+    expect(processKillSpy).toHaveBeenCalledWith(-5678, 'SIGTERM');
+    // A second, defensive SIGKILL must have been sent once the grace window
+    // for the process to actually exit elapsed without it doing so.
+    expect(processKillSpy).toHaveBeenCalledWith(-5678, 'SIGKILL');
+  });
+});
+
+describe('signalProcessGroup (#90 — review finding M4: ESRCH vs EPERM must be genuinely distinguished)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('swallows ESRCH (group already gone) rather than throwing', () => {
+    const fake = new FakeChildProcess(1111);
+    const esrch = Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw esrch;
+    });
+
+    expect(() => signalProcessGroup(fake as unknown as ChildProcess, 'SIGTERM')).not.toThrow();
+    expect(killSpy).toHaveBeenCalledWith(-1111, 'SIGTERM');
+  });
+
+  it('rethrows EPERM (permission denied) rather than swallowing it', () => {
+    const fake = new FakeChildProcess(2222);
+    const eperm = Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw eperm;
+    });
+
+    expect(() => signalProcessGroup(fake as unknown as ChildProcess, 'SIGTERM')).toThrow('kill EPERM');
+    expect(killSpy).toHaveBeenCalledWith(-2222, 'SIGTERM');
+  });
+});
+
+describe('shutdownTrackedProcesses (#90 — review finding I3: detached children need explicit cleanup)', () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('signals the process group of every currently tracked child', () => {
+    const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true);
+
+    const fakeA = new FakeChildProcess(6001);
+    spawnMock.mockReturnValueOnce(fakeA);
+    expect(startProject(makeProject({ id: 'shutdown-a', port: 4101 })).success).toBe(true);
+
+    const fakeB = new FakeChildProcess(6002);
+    spawnMock.mockReturnValueOnce(fakeB);
+    expect(startProject(makeProject({ id: 'shutdown-b', port: 4102 })).success).toBe(true);
+
+    shutdownTrackedProcesses('SIGTERM');
+
+    expect(killSpy).toHaveBeenCalledWith(-6001, 'SIGTERM');
+    expect(killSpy).toHaveBeenCalledWith(-6002, 'SIGTERM');
+
+    // Tidy up module state for later tests: let both children's 'close'
+    // fire as a clean, non-crash exit.
+    fakeA.emit('close', 0, null);
+    fakeB.emit('close', 0, null);
   });
 });

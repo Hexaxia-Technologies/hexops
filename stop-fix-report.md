@@ -268,3 +268,160 @@ output make the parent/child relationship unambiguous.)
    (`execFileSync` for `build`) works, and did not touch Windows behavior beyond
    the documented single-process degrade — neither was exercised by a real run
    (no Windows box here, and prod-mode build wasn't part of this bug).
+
+---
+
+## Addendum — response to independent review of `4e8c550`
+
+The review returned do-not-ship with two Critical and three Important findings.
+I agree with all five diagnoses (including that C2 was a real regression I
+introduced), fixed all five plus all four Minors, and added targeted
+regression coverage for each. Summary below; see the commit for the full diff.
+
+### C1 (Critical) — a shipped test could signal a real process group
+
+Confirmed: the "still bound after SIGTERM and SIGKILL" test was the one test
+in the file with no mock on `process.kill`, so after the previous test's
+`afterEach` ran `vi.restoreAllMocks()`, its `process.kill(-6666, 'SIGTERM'/
+'SIGKILL')` calls would hit the real syscall against a fabricated pid — on a
+box running ~35 real dev servers. This wasn't a per-test oversight I could
+patch one at a time with any confidence; I fixed it structurally.
+
+`process.kill` is now spied in the `stopProject` describe block's own
+`beforeEach`, before any test body runs, with a safe no-op default
+(`mockReturnValue(true)`, no side effects). Every test that needs custom
+kill behavior calls `.mockImplementation`/`.mockReturnValue` on that one
+shared `processKillSpy` — no test in this file calls `vi.spyOn(process,
+'kill')` a second time. The previously-unmocked test now inherits the safe
+default explicitly and unconditionally (and says so in a comment, so a
+future editor doesn't "helpfully" remove the now-apparently-redundant spy).
+`shutdownTrackedProcesses` and `signalProcessGroup`'s own describe blocks
+each spy `process.kill` locally per test, in the same pattern.
+
+### C2 (Critical) — the `stoppingProjects` guard was over-narrowed (regression, confirmed)
+
+Agreed with the diagnosis. I had gated `stoppingProjects.add` on `isLive`
+(tracked child, not yet exited), reasoning that only a live child has a
+`close` still pending. That reasoning was wrong: with `shell: true`, Node
+defers `'close'` until every stdio pipe finishes draining, and a grandchild
+holding those pipes open — while still holding the real port, exactly the
+#90 shape — can keep `close` pending well after the *direct* child
+(`exitCode`) already looks exited. Gating on `isLive` meant that routine
+case fell through unmarked: the deferred `close` later fired with
+`intentional=false`, producing a false "crashed" notification, and with
+`restartOnCrash` on, would relaunch the server the user had just
+deliberately stopped.
+
+Fixed exactly as suggested: `stoppingProjects.add(projectId)` now runs
+whenever a tracked `ChildProcess` exists at all (`if (entry)`), not only
+when it's live. Signalling itself is still gated on `isLive` (unchanged) —
+only the bookkeeping guard moved. Added
+`marks intentional even when the tracked child already looks exited but its
+close is still pending` in `process-manager.test.ts`, which constructs
+exactly that shape (tracked entry with `exitCode` already set, port freed
+via the fallback, then a late `close` fired manually) and asserts no crash
+notification fires. It fails against the `isLive`-gated version and passes
+now.
+
+### I1 (Important) — `stopByPort` could kill hexops itself
+
+Agreed — this was a real new route in, since the fallback is now reachable
+from a tracked stop whose group died but whose port is held by something
+else, not just the pre-existing fully-untracked-orphan case. Added an
+ownership guard in `stopByPort`: any pid `ss` reports that equals
+`process.pid` or `process.ppid` is skipped (logged, not killed) rather than
+sent `SIGKILL`. Each pid that *is* killed is now logged individually before
+the kill, for auditability. Covered by
+`refuses to kill hexops itself (or its parent) even if ss lists it on the port`.
+
+### I2 (Important) — `runWithDevServerGuard` ignored a failed stop
+
+Agreed — before #90 this branch was unreachable (stop effectively always
+"succeeded"), so it was never exercised. `runWithDevServerGuard` now checks
+`stopResult.success` immediately after awaiting it and, if false, returns
+`{ blocked: true, ranOperation: false, ... }` with a reason explaining the
+operation was refused because the server may still be live, without ever
+calling `operation()`. All four existing call sites (`override-remove`,
+`security/overrides/[id]/fix`, `update`, `security/cve-lite/[id]/fix`)
+already branch on `guardOutcome.blocked` generically (checked all four before
+making this change) and return a 409 with the reason, so none needed
+updating. One exception worth flagging separately: `override-remove/route.ts`
+does **not** check `blocked` at all before using `guardOutcome.result` — that
+gap pre-dates this change (it already mishandled `block-self` the same way)
+and is out of scope here, but it means a stop-failure on that specific route
+will currently return a misleading `{success:true, output:''}` rather than a
+409. Flagging for a follow-up, not fixing in this patch.
+
+Covered by `orchestrate: aborts (blocked, operation never runs) when stop
+fails to actually free the server` in the `runWithDevServerGuard` describe
+block.
+
+### I3 (Important) — `detached: true` orphans every server on Ctrl-C/terminal close
+
+Agreed, and the report's original claim was wrong — corrected here.
+`detached: false` didn't prevent orphaning on its own, but it kept tracked
+children in hexops's own foreground process group and session, so a
+terminal Ctrl-C (SIGINT to the foreground group) or terminal close (SIGHUP
+to the session) reaped them as a side effect, without any explicit cleanup
+code. `detached: true` calls `setsid()`, which severs both — Ctrl-C no
+longer reaches tracked children at all once this patch landed, and there
+was no code anywhere filling that gap.
+
+Added `shutdownTrackedProcesses(signal)`, which group-signals every
+currently-tracked child, and wired it to real `SIGINT`/`SIGTERM` with
+`process.exit()` afterward — but only outside test runs
+(`process.env.VITEST === 'true' || process.env.NODE_ENV === 'test'`) and
+only on POSIX. Registering unconditionally would have installed a real
+`process.on('SIGTERM', ...)` handler on every vitest worker process that
+imports this module, calling `process.exit()` — and vitest's own pool
+workers are routinely sent `SIGTERM` for normal lifecycle reasons (timeouts,
+`--watch` restarts, teardown), so intercepting that unconditionally would
+have been its own hazard. `shutdownTrackedProcesses` itself is exported and
+tested directly (`signals the process group of every currently tracked
+child`) without going through a real OS signal.
+
+### Minors
+
+- **M1** — applied exactly as suggested: the `close` handler now guards
+  `activeProcesses.delete(project.id)` on `activeProcesses.get(project.id)
+  ?.process === child`, so a late `close` from a superseded child can't
+  untrack its replacement.
+- **M2** — reverted the tightened 300ms `checkPort` timeout back to its
+  1000ms default everywhere `stopProject`/`stopByPort` call it (removed the
+  `STOP_PORT_CHECK_TIMEOUT_MS` override entirely). Agreed a shortened
+  per-attempt timeout was a false-success path in exactly the function meant
+  to eliminate them.
+- **M3** — `stopProject`'s tracked-success path now also confirms the
+  process itself, not just the port: once the port is free, it waits up to
+  500ms (`STOP_PROCESS_EXIT_GRACE_MS`) for `exitCode`/`signalCode` to be set,
+  and if it still hasn't exited, sends one more defensive `SIGKILL` before
+  reporting success (still port-gated per #90's actual contract, but no
+  longer silently trusting a released port over a `ChildProcess` handle we
+  are already holding). Covered by `port released but the process itself has
+  not exited yet: sends a defensive final SIGKILL`.
+- **M4** — exported `signalProcessGroup` (documented as test-only, not part
+  of the module's intended public surface) and added two direct unit tests
+  pinning that ESRCH is swallowed and EPERM is rethrown — the previous ESRCH
+  test only proved the *overall* stop still succeeded (via mocked
+  `checkPort`), which would have passed identically whether ESRCH was
+  swallowed inside `signalProcessGroup` or merely caught by `stopProject`'s
+  outer try/catch. Also added an integration-level EPERM test (`an EPERM on
+  the tracked group kill does not crash stopProject`) covering the case the
+  review called out as unprotected and most dangerous: a real signalling
+  failure that must log and fall through to the port-based fallback rather
+  than crashing or hanging.
+
+### Verification after the addendum fixes
+
+- Full suite: **399 passed / 46 files** (was 391/46; +8 new tests — 4 in the
+  `stopProject` block, 2 in a new `signalProcessGroup` block, 1 in a new
+  `shutdownTrackedProcesses` block, 1 in `runWithDevServerGuard`). Nothing
+  removed or weakened.
+- `tsc --noEmit`: clean.
+- Re-ran the real-process verification (same scratch port 39123, same
+  `sh(parent) -> node(child)` shape) against the fixed code: `stopProject ->
+  {"success":true}`, port confirmed released, tracked wrapper pid and all
+  real child pids confirmed dead by `kill -0`, hexops' own port-3000 server
+  confirmed untouched throughout. Same PASS outcome as the original
+  transcript, now against code that also survives the C1/C2/I1/I2/I3/M1–M4
+  fixes.
