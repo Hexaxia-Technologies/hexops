@@ -5,6 +5,7 @@ import type { ProjectConfig, LogEntry } from './types';
 import { logger } from './logger';
 import { getProjectSettings } from './settings';
 import { addNotification } from './notifications';
+import { checkPort } from './port-checker';
 
 interface ProcessEntry {
   process: ChildProcess;
@@ -165,7 +166,22 @@ export function startProject(
     const child = spawn(cmd, args, {
       cwd: project.path,
       shell: projectSettings.shell ?? true,
-      detached: false,
+      // detached: true makes the child its own process-group leader (POSIX
+      // setsid). With shell: true the tracked pid is the `sh -c "<cmd>"`
+      // wrapper, not the real dev server it execs/forks — a plain SIGTERM to
+      // that pid only reaches `sh`, which does not forward signals to its
+      // child, so the real process (e.g. next-server) survives and keeps the
+      // port bound (#90). Putting the child in its own group lets stopProject
+      // signal the whole group via `process.kill(-pid, ...)`.
+      //
+      // Consequence: a detached child is no longer auto-killed when hexops's
+      // own process exits. That's accepted here — these are long-lived dev
+      // servers hexops is meant to manage independently of its own restarts,
+      // and the previous shell-wrapper setup was *already* orphaning the
+      // real process in practice (this bug is proof of that). We deliberately
+      // do NOT call child.unref() — stdout/stderr must keep flowing into the
+      // log buffer for as long as hexops is up to observe them.
+      detached: true,
       env: {
         ...withoutInheritedBundlerEnv(process.env),
         ...projectFileEnv,
@@ -271,36 +287,89 @@ export function startProject(
   }
 }
 
-export function stopProject(projectId: string, port: number): { success: boolean; error?: string } {
-  // Cancel any pending restart timer
-  const timer = restartTimers.get(projectId);
-  if (timer) { clearTimeout(timer); restartTimers.delete(projectId); }
-  restartCounts.delete(projectId);
+// stopProject timing budgets (#90). Real dev servers (esp. Next.js) can take
+// a moment to shut down gracefully on SIGTERM; SIGKILL should free the port
+// almost immediately once the OS reaps the process, so it gets a much
+// shorter window.
+const STOP_SIGTERM_TIMEOUT_MS = 4000;
+const STOP_SIGKILL_TIMEOUT_MS = 1500;
+const STOP_POLL_INTERVAL_MS = 150;
+const STOP_PORT_CHECK_TIMEOUT_MS = 300;
 
-  // First try to kill the tracked process
-  stoppingProjects.add(projectId);
-  const entry = activeProcesses.get(projectId);
-  if (entry && !entry.process.killed) {
-    try {
-      entry.process.kill('SIGTERM');
-      activeProcesses.delete(projectId);
-      addLogEntry(projectId, 'stdout', '[SYS] Process stopped via SIGTERM');
-      return { success: true };
-    } catch {
-      // Fall through to port-based kill
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Poll checkPort until it reports the port free, or timeoutMs elapses. */
+async function waitUntilPortFree(
+  port: number,
+  timeoutMs: number,
+  pollIntervalMs: number = STOP_POLL_INTERVAL_MS
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  // Always check at least once, even for a zero-length budget.
+  if (!(await checkPort(port, STOP_PORT_CHECK_TIMEOUT_MS))) return true;
+  while (Date.now() < deadline) {
+    await sleep(pollIntervalMs);
+    if (!(await checkPort(port, STOP_PORT_CHECK_TIMEOUT_MS))) return true;
+  }
+  return false;
+}
+
+function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
+}
+
+/**
+ * Signal a tracked child's whole process group, not just the tracked pid
+ * (#90). Children are spawned with `detached: true`, making them their own
+ * group leader on POSIX, so `-pid` reliably reaches the wrapper shell *and*
+ * whatever it execs/forks. Windows has no equivalent of negative-pid group
+ * signalling, so there we degrade to signalling just the tracked pid.
+ *
+ * A group/process that is already gone answers with ESRCH — that is treated
+ * as "already stopped," not an error, and is swallowed here. Any other
+ * failure (e.g. EPERM) is rethrown for the caller to log and route around.
+ */
+function signalProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  const pid = child.pid;
+  if (!pid) return;
+
+  try {
+    if (process.platform === 'win32') {
+      child.kill(signal);
+    } else {
+      process.kill(-pid, signal);
     }
+  } catch (error) {
+    if (isErrnoException(error) && error.code === 'ESRCH') {
+      return;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Port-based fallback (#90). Finds whatever is actually listening on `port`
+ * via `ss` and SIGKILLs it directly. This is the only path available when
+ * there is no tracked entry at all — a server started before hexops
+ * launched, or orphaned by an earlier crash/restart — and it's also the
+ * last resort when a tracked kill escalated through SIGTERM+SIGKILL and
+ * still didn't free the port.
+ */
+async function stopByPort(projectId: string, port: number): Promise<{ success: boolean; error?: string }> {
+  if (!(await checkPort(port, STOP_PORT_CHECK_TIMEOUT_MS))) {
+    return { success: true };
   }
 
-  // Fallback: kill by port using ss (lsof often needs sudo)
-  // Security note: port is a number from config, not user string input
   try {
     let pids: string[] = [];
     try {
       // Use ss to find PIDs - format: users:(("process",pid=12345,fd=19))
+      // Security note: port is a number from config, not user string input
       const result = execFileSync('ss', ['-tlnp', `sport = :${port}`], {
         encoding: 'utf-8',
       });
-      // Extract PIDs from ss output using regex
       const pidMatches = result.matchAll(/pid=(\d+)/g);
       for (const match of pidMatches) {
         pids.push(match[1]);
@@ -309,27 +378,96 @@ export function stopProject(projectId: string, port: number): { success: boolean
       // ss may fail, which is fine
     }
 
-    if (pids.length > 0) {
-      for (const pid of pids) {
-        // Validate pid is numeric before using
-        if (/^\d+$/.test(pid)) {
-          try {
-            execFileSync('kill', ['-9', pid]);
-          } catch {
-            // Ignore errors (process may have already exited)
-          }
+    for (const pid of pids) {
+      // Validate pid is numeric before using
+      if (/^\d+$/.test(pid)) {
+        try {
+          execFileSync('kill', ['-9', pid]);
+        } catch {
+          // Ignore errors (process may have already exited)
         }
       }
-      activeProcesses.delete(projectId);
+    }
+
+    const freed = await waitUntilPortFree(port, STOP_SIGKILL_TIMEOUT_MS);
+    if (freed) {
       addLogEntry(projectId, 'stdout', `[SYS] Process killed via port ${port}`);
       return { success: true };
     }
 
-    return { success: false, error: 'No process found on port' };
+    return {
+      success: false,
+      error: pids.length > 0
+        ? `Sent SIGKILL to pid(s) ${pids.join(', ')} on port ${port}, but the port is still bound`
+        : `No process found on port ${port} via ss, but the port is still bound`,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     return { success: false, error: message };
   }
+}
+
+export async function stopProject(projectId: string, port: number): Promise<{ success: boolean; error?: string }> {
+  // Cancel any pending restart timer
+  const timer = restartTimers.get(projectId);
+  if (timer) { clearTimeout(timer); restartTimers.delete(projectId); }
+  restartCounts.delete(projectId);
+
+  const entry = activeProcesses.get(projectId);
+  const isLive = entry != null && entry.process.pid != null
+    && entry.process.exitCode === null && entry.process.signalCode === null;
+
+  if (entry && isLive) {
+    // Mark this projectId as an intentional stop *before* signalling, since
+    // the child's 'close' handler can fire at any point during the awaits
+    // below and needs to see this to avoid treating it as a crash. Only set
+    // when there's a live tracked process — a 'close' event will eventually
+    // clean this back up. (Setting it unconditionally, including for the
+    // port-only fallback below, would leak forever for a projectId with no
+    // tracked entry, silently disabling crash detection on a later start.)
+    stoppingProjects.add(projectId);
+
+    try {
+      signalProcessGroup(entry.process, 'SIGTERM');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      addLogEntry(projectId, 'stderr', `[SYS] Failed to send SIGTERM to process group: ${message}`);
+    }
+
+    let portFreed = await waitUntilPortFree(port, STOP_SIGTERM_TIMEOUT_MS);
+
+    if (!portFreed) {
+      addLogEntry(projectId, 'stdout', '[SYS] Still bound after SIGTERM — escalating to SIGKILL');
+      try {
+        signalProcessGroup(entry.process, 'SIGKILL');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        addLogEntry(projectId, 'stderr', `[SYS] Failed to send SIGKILL to process group: ${message}`);
+      }
+      portFreed = await waitUntilPortFree(port, STOP_SIGKILL_TIMEOUT_MS);
+    }
+
+    if (portFreed) {
+      activeProcesses.delete(projectId);
+      addLogEntry(projectId, 'stdout', '[SYS] Process stopped');
+      return { success: true };
+    }
+
+    addLogEntry(
+      projectId,
+      'stderr',
+      '[SYS] Process group survived SIGTERM+SIGKILL — falling back to port-based kill'
+    );
+  }
+
+  // Port-based fallback — runs whenever the tracked route (or lack thereof)
+  // did not verifiably free the port, including when there is no tracked
+  // entry at all. Reporting success without this check is exactly bug #90.
+  const fallback = await stopByPort(projectId, port);
+  if (fallback.success) {
+    activeProcesses.delete(projectId);
+  }
+  return fallback;
 }
 
 // Strip ANSI escape codes for clean display
@@ -459,7 +597,7 @@ export interface DevServerGuardDeps {
   isSelf: (project: ProjectConfig) => boolean;
   isRunning: (projectId: string) => boolean;
   getMode: (projectId: string) => StartMode;
-  stop: (projectId: string, port: number) => { success: boolean; error?: string };
+  stop: (projectId: string, port: number) => Promise<{ success: boolean; error?: string }>;
   start: (project: ProjectConfig, mode: StartMode) => { success: boolean; error?: string };
   clearBuildDir: (projectPath: string) => void;
 }
@@ -531,7 +669,7 @@ export async function runWithDevServerGuard<T>(
 
   // orchestrate: capture the mode before stopping, restore in finally
   const mode = deps.getMode(project.id);
-  const stopResult = deps.stop(project.id, project.port);
+  const stopResult = await deps.stop(project.id, project.port);
   let result: T | undefined;
   let restarted = false;
   let restartError: string | undefined;
