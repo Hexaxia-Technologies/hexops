@@ -29,7 +29,7 @@ export async function POST(
       );
     }
 
-    const result = stopProject(id, project.port);
+    const result = await stopProject(id, project.port);
 
     if (!result.success) {
       return NextResponse.json(
