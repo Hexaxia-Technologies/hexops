@@ -71,3 +71,6 @@ docs/superpowers/
 
 # Playwright MCP session artifacts
 .playwright-mcp/
+
+# Local, unsanitised agent context (contains fleet/private-project detail)
+AGENT_CONTEXT.local.md
