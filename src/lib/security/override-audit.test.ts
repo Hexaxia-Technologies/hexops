@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildOverrideCommand } from './override-audit';
+import { buildOverrideCommand, classifyMissingOverrideOutput } from './override-audit';
 import type { OverrideAuditOutput } from './override-audit';
 
 describe('buildOverrideCommand', () => {
@@ -15,6 +15,34 @@ describe('buildOverrideCommand', () => {
     expect(buildOverrideCommand('/bin/cve-lite', '/p', ['--rule', 'OA009'])).toBe(
       '"/bin/cve-lite" "/p" "overrides" "--json" "--rule" "OA009"',
     );
+  });
+});
+
+describe('classifyMissingOverrideOutput', () => {
+  it('classifies the CLI\'s "no package.json" error as no-package-json (hextrace case: planning-only repo)', () => {
+    const outcome = classifyMissingOverrideOutput({
+      execErrorMessage: 'Command failed with exit code 3',
+      stdout: '',
+      stderr: 'overrides: buildOverrideContext: no package.json at /home/aaron/Projects/hextrace',
+    });
+    expect(outcome.kind).toBe('no-package-json');
+  });
+
+  it('classifies any other failure as error, carrying the exec error message', () => {
+    const outcome = classifyMissingOverrideOutput({
+      execErrorMessage: 'spawn ENOENT',
+      stdout: '',
+      stderr: '',
+    });
+    expect(outcome).toEqual({
+      kind: 'error',
+      message: 'cve-lite overrides produced no output: spawn ENOENT',
+    });
+  });
+
+  it('falls back to a generic message when there is no exec error message', () => {
+    const outcome = classifyMissingOverrideOutput({ stdout: '', stderr: '' });
+    expect(outcome).toEqual({ kind: 'error', message: 'cve-lite overrides produced no output' });
   });
 });
 

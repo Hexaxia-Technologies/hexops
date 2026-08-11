@@ -1,5 +1,6 @@
+import { existsSync } from 'fs';
 import type { ProjectConfig } from '../types';
-import type { Finding, ScanResult, ScanSource, SourceResult, SourceStatus } from './types';
+import { ScanSkippedError, type Finding, type ScanResult, type ScanSource, type SourceResult, type SourceStatus } from './types';
 import { mergeFindings } from './merger';
 import { writeSecurityCache } from './persistence';
 import { SOURCES } from './sources';
@@ -44,8 +45,13 @@ async function runOne(source: ScanSource, project: ProjectConfig): Promise<{ res
   } else {
     const timeout = source.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const outcome = await withTimeout(source.scan(project), timeout).catch((err) => {
-      error = err instanceof Error ? err.message : String(err);
-      status = 'failed';
+      if (err instanceof ScanSkippedError) {
+        status = 'skipped';
+        error = err.message;
+      } else {
+        error = err instanceof Error ? err.message : String(err);
+        status = 'failed';
+      }
       return { ok: false } as const;
     });
     if (status === 'ok' && 'ok' in outcome && outcome.ok) {
@@ -72,6 +78,25 @@ async function runOne(source: ScanSource, project: ProjectConfig): Promise<{ res
 
 export const _runOneForTest = runOne;
 
+/**
+ * Missing-path check runs once here, before any source is invoked, rather
+ * than inside each source's scan(). The path being absent affects every
+ * source identically — there's nothing source-specific to say about it — so
+ * a single pre-flight check keeps the "misconfigured" message consistent
+ * across sources instead of each one inventing its own wording (and its own
+ * way of detecting the same condition).
+ */
+function buildMisconfiguredResult(sourceId: string, message: string): SourceResult {
+  return {
+    id: sourceId,
+    status: 'misconfigured',
+    startedAt: new Date().toISOString(),
+    durationMs: 0,
+    findingCount: 0,
+    error: message,
+  };
+}
+
 export async function scanProjectWithSources(project: ProjectConfig, sources: ScanSource[]): Promise<ScanResult> {
   const existing = inflight.get(project.id);
   if (existing) return existing;
@@ -81,23 +106,32 @@ export async function scanProjectWithSources(project: ProjectConfig, sources: Sc
     const perSource = new Map<string, Finding[]>();
     const sourcesRecord: Record<string, SourceResult> = {};
 
-    await Promise.all(sources.map(async (s) => {
-      try {
-        const { result, findings } = await runOne(s, project);
-        sourcesRecord[s.id] = result;
-        perSource.set(s.id, findings);
-      } catch (err) {
-        sourcesRecord[s.id] = {
-          id: s.id,
-          status: 'failed',
-          startedAt: new Date().toISOString(),
-          durationMs: 0,
-          findingCount: 0,
-          error: err instanceof Error ? err.message : String(err),
-        };
+    const pathMissing = !existsSync(project.path);
+    if (pathMissing) {
+      const message = `Configured project path does not exist: ${project.path}`;
+      for (const s of sources) {
+        sourcesRecord[s.id] = buildMisconfiguredResult(s.id, message);
         perSource.set(s.id, []);
       }
-    }));
+    } else {
+      await Promise.all(sources.map(async (s) => {
+        try {
+          const { result, findings } = await runOne(s, project);
+          sourcesRecord[s.id] = result;
+          perSource.set(s.id, findings);
+        } catch (err) {
+          sourcesRecord[s.id] = {
+            id: s.id,
+            status: 'failed',
+            startedAt: new Date().toISOString(),
+            durationMs: 0,
+            findingCount: 0,
+            error: err instanceof Error ? err.message : String(err),
+          };
+          perSource.set(s.id, []);
+        }
+      }));
+    }
 
     const findings = mergeFindings(perSource);
     const result: ScanResult = {

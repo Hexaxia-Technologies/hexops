@@ -31,6 +31,11 @@ function pickTone(status: SourceResult['status'], findingCount: number, warning?
       failed:      { dot: 'bg-red-500',    text: 'text-red-400',    border: 'border-red-700/60',           label: 'failed'      },
       unavailable: { dot: 'bg-zinc-500',   text: 'text-zinc-400',   border: 'border-zinc-800 opacity-70',  label: 'unavailable' },
       timeout:     { dot: 'bg-orange-500', text: 'text-orange-400', border: 'border-orange-700/60',        label: 'timeout'     },
+      // Informational, not an error — nothing was there to scan.
+      skipped:       { dot: 'bg-sky-500', text: 'text-sky-400', border: 'border-sky-700/60', label: 'skipped' },
+      // A config error (bad/missing project path) — loud like a failure, but
+      // labeled distinctly so it reads as "fix your config", not "scan broke".
+      misconfigured: { dot: 'bg-red-500', text: 'text-red-400', border: 'border-red-700/60', label: 'misconfigured' },
     };
     return map[status];
   }
@@ -80,6 +85,9 @@ export function SourceCard({ result, deepLinkHref }: SourceCardProps) {
       )}
       {result.warning && (
         <div className="mt-1 text-[0.65rem] text-amber-400">{result.warning}</div>
+      )}
+      {(result.status === 'skipped' || result.status === 'misconfigured') && result.error && (
+        <div className={`mt-1 text-[0.65rem] ${tone.text}`}>{result.error}</div>
       )}
       {deepLinkHref && (
         <a

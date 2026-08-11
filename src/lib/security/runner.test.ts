@@ -1,15 +1,19 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { _setCacheDirForTest } from './persistence';
 import { _setFindingStatesDirForTest } from './finding-states';
 import { scanProjectWithSources, _runOneForTest } from './runner';
-import type { ScanSource, Finding } from './types';
+import { ScanSkippedError, type ScanSource, type Finding } from './types';
 import type { ProjectConfig } from '../types';
 
+// project.path must exist on disk — scanProjectWithSources now does a
+// pre-flight existsSync(project.path) check before running any source.
+const projectPath = '/tmp/hexops-runner-test-p1';
+mkdirSync(projectPath, { recursive: true });
 const project: ProjectConfig = {
-  id: 'p1', name: 'P1', path: '/tmp/p1', port: 3000, category: 'Internal',
+  id: 'p1', name: 'P1', path: projectPath, port: 3000, category: 'Internal',
   scripts: { dev: 'pnpm dev', build: 'pnpm build' },
 };
 
@@ -136,5 +140,53 @@ describe('runner.scanProjectWithSources', () => {
     };
     const { result } = await _runOneForTest(source, { id: 'p', name: 'p', path: '/tmp' } as ProjectConfig);
     expect(result.warning).toBeUndefined();
+  });
+
+  it('records skipped status (not failed) when a source throws ScanSkippedError', async () => {
+    const source: ScanSource = {
+      id: 'nothing-to-scan',
+      displayName: 'Nothing To Scan',
+      findingTypes: ['vulnerability'],
+      isAvailable: async () => true,
+      scan: async () => { throw new ScanSkippedError('No scannable packages found under /proj'); },
+    };
+    const { result } = await _runOneForTest(source, { id: 'p', name: 'p', path: '/tmp' } as ProjectConfig);
+    expect(result.status).toBe('skipped');
+    expect(result.error).toBe('No scannable packages found under /proj');
+    expect(result.findingCount).toBe(0);
+  });
+
+  it('records misconfigured status for every source when the project path does not exist', async () => {
+    const missingPathProject: ProjectConfig = {
+      ...project,
+      id: 'missing-path-project',
+      path: '/tmp/hexops-runner-test-path-does-not-exist',
+    };
+    const result = await scanProjectWithSources(missingPathProject, [
+      source('s1', { findings: [] }),
+      source('s2', { findings: [] }),
+    ]);
+    expect(result.sources.s1.status).toBe('misconfigured');
+    expect(result.sources.s2.status).toBe('misconfigured');
+    expect(result.sources.s1.error).toContain(missingPathProject.path);
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it('does not call isAvailable/scan on any source when the project path is missing', async () => {
+    let called = false;
+    const spySource: ScanSource = {
+      id: 'spy',
+      displayName: 'Spy',
+      findingTypes: ['vulnerability'],
+      isAvailable: async () => { called = true; return true; },
+      scan: async () => ({ findings: [] }),
+    };
+    const missingPathProject: ProjectConfig = {
+      ...project,
+      id: 'missing-path-project-2',
+      path: '/tmp/hexops-runner-test-path-does-not-exist-2',
+    };
+    await scanProjectWithSources(missingPathProject, [spySource]);
+    expect(called).toBe(false);
   });
 });

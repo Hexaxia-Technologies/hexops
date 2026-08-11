@@ -13,12 +13,23 @@ function relTime(ts?: string | null) {
   return `${Math.round(h / 24)}d ago`;
 }
 
-const STATUS_COLOR = {
+const STATUS_COLOR: Record<SourceResult['status'], string> = {
   ok: 'text-green-400',
   failed: 'text-red-400',
   unavailable: 'text-zinc-500',
   timeout: 'text-yellow-400',
-} as const;
+  skipped: 'text-sky-400',
+  misconfigured: 'text-red-400',
+};
+
+const STATUS_ICON: Record<SourceResult['status'], string> = {
+  ok: '✓',
+  failed: '✗',
+  unavailable: '✗',
+  timeout: '✗',
+  skipped: '–',
+  misconfigured: '⚠',
+};
 
 interface Props {
   projectId: string;
@@ -46,9 +57,14 @@ export function SourceStrip({ projectId, sources, onRescan }: Props) {
       {entries.map(([id, r]) => (
         <span key={id} className="flex items-center gap-1">
           <span className="font-medium text-zinc-300">{id}</span>
-          <span className={STATUS_COLOR[r.status]}>{r.status === 'ok' ? '✓' : '✗'}</span>
+          <span className={STATUS_COLOR[r.status]}>{STATUS_ICON[r.status]}</span>
           <span>{relTime(r.startedAt)}</span>
-          {r.error && <span className="text-red-400" title={r.error}>· error</span>}
+          {r.error && r.status === 'skipped' && (
+            <span className="text-sky-400" title={r.error}>· skipped</span>
+          )}
+          {r.error && r.status !== 'skipped' && (
+            <span className="text-red-400" title={r.error}>· error</span>
+          )}
         </span>
       ))}
       <button

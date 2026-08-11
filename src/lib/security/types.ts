@@ -46,7 +46,28 @@ export interface Finding {
   reachable?: boolean | null;     // from --usage; null = not analyzed / unknown
 }
 
-export type SourceStatus = 'ok' | 'failed' | 'unavailable' | 'timeout';
+/**
+ * - 'skipped': the source ran (or would have run) but there was nothing to
+ *   scan — e.g. cve-lite found no supported lockfile and no exact-pinned
+ *   deps in package.json. Informational, NOT a failure.
+ * - 'misconfigured': the project's configured path doesn't exist/isn't
+ *   readable, so no source could run at all. A config error — loud and
+ *   unambiguous, but distinct from a genuine scan failure.
+ */
+export type SourceStatus = 'ok' | 'failed' | 'unavailable' | 'timeout' | 'skipped' | 'misconfigured';
+
+/**
+ * Thrown by a ScanSource's scan() to signal "nothing to scan" rather than a
+ * failure — e.g. cve-lite exits 0 with no output file because it found zero
+ * scannable packages. The runner catches this and records status 'skipped'
+ * instead of 'failed'.
+ */
+export class ScanSkippedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ScanSkippedError';
+  }
+}
 
 export interface SourceResult {
   id: string;
