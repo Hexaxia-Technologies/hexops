@@ -11,12 +11,12 @@ import { clearInMemoryCache } from '@/app/api/projects/[id]/package-health/route
 import { logger } from '@/lib/logger';
 import type { LockfileResolutionMode } from '@/lib/types';
 
-import { verifyAuditClear, type UpdatePackage } from '@/lib/updaters/common';
+import { verifyAuditClear, type UpdatePackage, type UpdateResult } from '@/lib/updaters/common';
 import { checkNodeModulesHealth, cleanNodeModules } from '@/lib/updaters/npm';
 import { checkPnpmLockfileHealth, repairPnpmLockfile, buildPnpmUpdateCmd } from '@/lib/updaters/pnpm';
 import { buildNpmUpdateCmd } from '@/lib/updaters/npm';
 import { buildYarnUpdateCmd } from '@/lib/updaters/yarn';
-import { applyOverrides, removeOverrideConflicts, cleanStaleOverrides } from '@/lib/updaters/override';
+import { applyOverrides, removeOverrideConflicts, cleanStaleOverrides, findAllInstalledVersions, pickLowestVersion } from '@/lib/updaters/override';
 import { installPackages } from '@/lib/updaters/install';
 import { execAsync } from '@/lib/updaters/common';
 import { SECURITY_PLUGINS } from '@/lib/security/plugins';
@@ -118,7 +118,7 @@ export async function POST(
       }
     } catch { /* ignore */ }
 
-    const results: Array<{ package: string; success: boolean; output: string; error?: string }> = [];
+    const results: UpdateResult[] = [];
 
     // Install-gate state — set when an installGate plugin rewrites the binary;
     // carried to the audit-trail log at the bottom of the closure.
@@ -162,10 +162,29 @@ export async function POST(
         let effectiveFromVersion = pkg.fromVersion || '';
         if (!effectiveFromVersion && !/^(latest|next|canary|resolve-latest)$/.test(targetVersion)) {
           try {
-            const nmPath = join(cwd, 'node_modules', pkg.name, 'package.json');
-            if (existsSync(nmPath)) {
-              effectiveFromVersion = JSON.parse(readFileSync(nmPath, 'utf-8')).version || '';
-            }
+            // A root-only node_modules read is the same isolated-linker blind
+            // spot fixed inside override.ts: packages requested here are
+            // frequently the transitive overrides applyOverrides manages, and
+            // on pnpm's default node-linker=isolated those have no root
+            // node_modules entry at all — they live in the .pnpm store
+            // instead. A root-only check silently leaves effectiveFromVersion
+            // empty on exactly the projects this whole round targeted, which
+            // in turn leaves the stale-tree guard in applyOverrides inert.
+            // Reuse the same lookup (root, then .pnpm store) rather than
+            // duplicating a second, narrower version of it here.
+            //
+            // Deliberately pickLowestVersion, NOT pickPrimaryVersion: this
+            // feeds the downgrade guard below, whose job is "is anything
+            // still below target" — the worst case across every copy — not
+            // "what's the one representative version". Feeding it the
+            // highest copy is actively wrong on a multi-copy isolated
+            // layout: a vulnerable 8.4.31 sitting next to a clean 8.5.30,
+            // against a target of 8.5.26, would read as "already past this
+            // fix" from the 8.5.30 copy and refuse the whole update —
+            // leaving the vulnerable 8.4.31 untouched. Refuse only when
+            // EVERY copy is already at or above the target.
+            const { all } = findAllInstalledVersions(cwd, pkg.name);
+            effectiveFromVersion = pickLowestVersion(all) || '';
           } catch { /* fall through */ }
         }
         if (effectiveFromVersion && !/^(latest|next|canary|resolve-latest)$/.test(targetVersion)) {
@@ -177,7 +196,14 @@ export async function POST(
             continue;
           }
         }
-        validPackages.push({ name: pkg.name, fromVersion: pkg.fromVersion, targetVersion, fixViaOverride: pkg.fixViaOverride, fixByParent: pkg.fixByParent });
+        // Use effectiveFromVersion (falls back to reading node_modules when the
+        // request omitted fromVersion), not the raw request field. applyOverrides'
+        // stale-tree guard (override.ts) compares node_modules against fromVersion
+        // to tell "the install genuinely ran" apart from "node_modules was already
+        // in this state before we started" — if the raw (often-absent) request
+        // field is threaded through instead, that guard silently never fires for
+        // any request that omits fromVersion, which is the common case.
+        validPackages.push({ name: pkg.name, fromVersion: effectiveFromVersion || undefined, targetVersion, fixViaOverride: pkg.fixViaOverride, fixByParent: pkg.fixByParent });
       }
 
       // Separate transitive / override / direct packages

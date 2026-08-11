@@ -312,7 +312,17 @@ export interface PatchHistoryEntry {
   projectId: string;
   package: string;
   fromVersion: string;
+  /** The version that was targeted/requested — kept as-is; do not repurpose this to mean "what got installed". */
   toVersion: string;
+  /**
+   * The version actually found installed on disk after the patch, when it
+   * could be determined (see UpdateResult.resolvedVersion for the full
+   * rationale). Undefined, not defaulted to toVersion, when verification
+   * was inconclusive. With a `>=` floor override this can legitimately
+   * differ from toVersion — that's success, not a discrepancy to paper
+   * over by conflating the two fields.
+   */
+  resolvedVersion?: string;
   updateType: UpdateType;
   trigger: PatchTrigger;
   success: boolean;

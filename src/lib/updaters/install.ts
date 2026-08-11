@@ -136,7 +136,19 @@ export async function installPackages(
         if (existsSync(nmPath)) {
           const installed = JSON.parse(readFileSync(nmPath, 'utf-8'));
           const isFloatingTarget = /^(latest|next|canary)$/.test(pkg.targetVersion);
-          if (installed.version === pkg.fromVersion && !isFloatingTarget) {
+          // "Version didn't change" is only a failure signal when it also
+          // isn't already the requested version. Since route.ts started
+          // passing the node_modules-read effectiveFromVersion (rather than
+          // the often-absent raw request field) for requests that omit
+          // fromVersion, fromVersion can now legitimately equal the
+          // pre-install installed version in the benign "already at the
+          // target, re-requested from a stale scan cache" case — the
+          // downgrade guard upstream deliberately lets that case through
+          // (strict `>` comparison), and a plain no-op reinstall correctly
+          // leaves the version unchanged. Without this qualifier, that
+          // benign case would report `success: false` even though the
+          // package is exactly where it should be.
+          if (installed.version === pkg.fromVersion && installed.version !== pkg.targetVersion && !isFloatingTarget) {
             verified = false;
             logger.warn('patches', 'version_unchanged', `${pkg.name} still at ${installed.version} after install`, {
               projectId,
