@@ -177,7 +177,14 @@ export async function POST(
             continue;
           }
         }
-        validPackages.push({ name: pkg.name, fromVersion: pkg.fromVersion, targetVersion, fixViaOverride: pkg.fixViaOverride, fixByParent: pkg.fixByParent });
+        // Use effectiveFromVersion (falls back to reading node_modules when the
+        // request omitted fromVersion), not the raw request field. applyOverrides'
+        // stale-tree guard (override.ts) compares node_modules against fromVersion
+        // to tell "the install genuinely ran" apart from "node_modules was already
+        // in this state before we started" — if the raw (often-absent) request
+        // field is threaded through instead, that guard silently never fires for
+        // any request that omits fromVersion, which is the common case.
+        validPackages.push({ name: pkg.name, fromVersion: effectiveFromVersion || undefined, targetVersion, fixViaOverride: pkg.fixViaOverride, fixByParent: pkg.fixByParent });
       }
 
       // Separate transitive / override / direct packages

@@ -45,6 +45,7 @@ vi.mock('@/lib/logger', () => ({
 }));
 
 import { applyOverrides, removeOverrideConflicts, cleanStaleOverrides, toFloorRange } from './override';
+import { logger } from '@/lib/logger';
 
 const dirs: string[] = [];
 function makeTmpDir(prefix: string): string {
@@ -79,11 +80,28 @@ function writeInstalledVersion(dir: string, pkgName: string, version: string): v
   writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: pkgName, version }), 'utf-8');
 }
 
+// Simulates pnpm's default `node-linker=isolated` virtual store layout:
+// node_modules/.pnpm/<name>@<version>[_peerSuffix]/node_modules/<name>/package.json,
+// with scoped names' "/" replaced by "+" in the store directory name — the
+// exact convention confirmed against this repo's own `pnpm list --json`
+// output (e.g. `@vitest/ui` stores as `.pnpm/@vitest+ui@4.1.9_.../...`).
+// `peerSuffix` lets a test create two distinct store directories for the
+// same package+version-prefix (i.e. two different peer-dep resolutions),
+// or more commonly here, two different versions entirely.
+function writePnpmStoreVersion(dir: string, pkgName: string, version: string, peerSuffix = ''): void {
+  const storeDirName = `${pkgName.replace('/', '+')}@${version}${peerSuffix}`;
+  const pkgDir = join(dir, 'node_modules', '.pnpm', storeDirName, 'node_modules', pkgName);
+  mkdirSync(pkgDir, { recursive: true });
+  writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: pkgName, version }), 'utf-8');
+}
+
 afterEach(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
   dirs.length = 0;
   execAsyncMock.mockReset();
   execAsyncMock.mockResolvedValue({ stdout: '', stderr: '' });
+  vi.mocked(logger.warn).mockClear();
+  vi.mocked(logger.info).mockClear();
 });
 
 describe('toFloorRange', () => {
@@ -168,7 +186,7 @@ describe('applyOverrides', () => {
     expect(pkgJson.dependencies!.postcss).toBe('>=8.5.26');
   });
 
-  it('does not warn when the resolved version satisfies the floor but is not an exact match', async () => {
+  it('does not warn when the resolved version satisfies the floor but is not an exact match, and reports the resolved version', async () => {
     const dir = makeTmpDir('hexops-apply-satisfy-');
     writePkgJson(dir, { name: 'proj', version: '1.0.0' });
     // Simulate the install having resolved to a newer patch than the floor's base —
@@ -178,7 +196,12 @@ describe('applyOverrides', () => {
     const pkgs: UpdatePackage[] = [{ name: 'postcss', fromVersion: '8.5.15', targetVersion: '8.5.26' }];
     const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
 
-    expect(results[0].output).not.toMatch(/resolved to .* may need lockfile reset/);
+    expect(results[0].output).not.toMatch(/may need lockfile reset/);
+    // The written floor stays visible (">=8.5.26") alongside what actually
+    // resolved (8.5.30) — the point is "requested X, resolved Y", not one
+    // or the other.
+    expect(results[0].output).toMatch(/postcss@>=8\.5\.26, resolved 8\.5\.30/);
+    expect(results[0].resolvedVersion).toBe('8.5.30');
   });
 
   it('WARNS when the installed version does not satisfy the written floor (resolved lower than target)', async () => {
@@ -193,7 +216,7 @@ describe('applyOverrides', () => {
     const pkgs: UpdatePackage[] = [{ name: 'postcss', fromVersion: '8.5.15', targetVersion: '8.5.26' }];
     const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
 
-    expect(results[0].output).toMatch(/resolved to 8\.5\.20 — may need lockfile reset/);
+    expect(results[0].output).toMatch(/resolved to 8\.5\.20 \(does not satisfy >=8\.5\.26\) — may need lockfile reset/);
   });
 
   it('WARNS on a mismatch a bare "installed >= target" scalar check would have missed', async () => {
@@ -212,7 +235,138 @@ describe('applyOverrides', () => {
     const pkgs: UpdatePackage[] = [{ name: 'weird-pkg', targetVersion: '1.0.0-beta.1' }];
     const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
 
-    expect(results[0].output).toMatch(/resolved to 2\.0\.0-alpha\.1 — may need lockfile reset/);
+    expect(results[0].output).toMatch(/resolved to 2\.0\.0-alpha\.1 \(does not satisfy >=1\.0\.0-beta\.1\) — may need lockfile reset/);
+  });
+
+  it('logs a distinct warning — not a failure — when the resolved version is a newer major than targeted', async () => {
+    const dir = makeTmpDir('hexops-apply-majorjump-');
+    writePkgJson(dir, { name: 'proj', version: '1.0.0' });
+    // Satisfies the >=8.5.26 floor (no ceiling, by owner decision), but
+    // lands in a major well beyond the one that was targeted.
+    writeInstalledVersion(dir, 'postcss', '10.1.0');
+
+    const pkgs: UpdatePackage[] = [{ name: 'postcss', fromVersion: '8.5.15', targetVersion: '8.5.26' }];
+    const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+    expect(results[0].success).toBe(true);
+    expect(results[0].resolvedVersion).toBe('10.1.0');
+    expect(results[0].output).not.toMatch(/may need lockfile reset/); // satisfies the floor — not a mismatch
+    expect(logger.warn).toHaveBeenCalledWith(
+      'patches',
+      'override_major_jump',
+      expect.any(String),
+      expect.objectContaining({
+        meta: expect.objectContaining({ package: 'postcss', resolvedVersion: '10.1.0', targetMajor: 8, resolvedMajor: 10 }),
+      }),
+    );
+  });
+
+  describe('resolved-version lookup (isolated pnpm node-linker)', () => {
+    it('finds the resolved version via the .pnpm store when there is no root node_modules entry', async () => {
+      const dir = makeTmpDir('hexops-apply-pnpmstore-');
+      writePkgJson(dir, { name: 'proj', version: '1.0.0' });
+      // No root node_modules/postcss at all — simulates pnpm's default
+      // isolated linker, where a purely-transitive package lives only in
+      // the .pnpm store. This is the concretely-identified blind spot: a
+      // root-only existsSync check silently no-ops on this layout.
+      writePnpmStoreVersion(dir, 'postcss', '8.5.30');
+
+      const pkgs: UpdatePackage[] = [{ name: 'postcss', fromVersion: '8.5.15', targetVersion: '8.5.26' }];
+      const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+      expect(results[0].success).toBe(true);
+      expect(results[0].resolvedVersion).toBe('8.5.30');
+      expect(results[0].output).not.toMatch(/may need lockfile reset/);
+    });
+
+    it('resolves a scoped package from the .pnpm store using the "/" -> "+" name encoding', async () => {
+      const dir = makeTmpDir('hexops-apply-pnpmstore-scoped-');
+      writePkgJson(dir, { name: 'proj', version: '1.0.0' });
+      writePnpmStoreVersion(dir, '@scope/pkg', '2.1.0');
+
+      const pkgs: UpdatePackage[] = [{ name: '@scope/pkg', targetVersion: '2.0.0' }];
+      const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+      expect(results[0].resolvedVersion).toBe('2.1.0');
+    });
+
+    it('flags a mismatch when ANY copy in the .pnpm store falls below the floor, even if others satisfy it', async () => {
+      const dir = makeTmpDir('hexops-apply-pnpmstore-multi-');
+      writePkgJson(dir, { name: 'proj', version: '1.0.0' });
+      // Two distinct copies coexist in the store — one satisfying, one
+      // still vulnerable. A check that stopped at the first hit (or only
+      // ever looked at root) would miss this — exactly the "top-level fix,
+      // vulnerable nested copy survives" false-clear class this project
+      // already tracks as issue #80.
+      writePnpmStoreVersion(dir, 'postcss', '8.5.30');
+      writePnpmStoreVersion(dir, 'postcss', '8.4.31', '_react@19.2.7');
+
+      const pkgs: UpdatePackage[] = [{ name: 'postcss', fromVersion: '8.5.15', targetVersion: '8.5.26' }];
+      const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+      expect(results[0].success).toBe(true); // a floor violation still isn't "success: false" territory
+      expect(results[0].output).toMatch(/resolved to 8\.4\.31 \(does not satisfy >=8\.5\.26\) — may need lockfile reset/);
+    });
+
+    it('falls back to `pnpm list --json` when the filesystem probe (root + .pnpm store) finds nothing', async () => {
+      const dir = makeTmpDir('hexops-apply-clifallback-');
+      writePkgJson(dir, { name: 'proj', version: '1.0.0' });
+      // No root copy, no .pnpm store directory at all — filesystem probe is
+      // fully empty. This simulates a store location or workspace layout
+      // the filesystem probe doesn't recognize.
+      execAsyncMock.mockImplementation(async (cmd: unknown) => {
+        if (typeof cmd === 'string' && cmd.includes('pnpm list')) {
+          return {
+            stdout: JSON.stringify([{
+              name: 'proj',
+              dependencies: { next: { version: '16.3.0', dependencies: { postcss: { version: '8.5.30' } } } },
+            }]),
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' }; // the install command itself
+      });
+
+      const pkgs: UpdatePackage[] = [{ name: 'postcss', fromVersion: '8.5.15', targetVersion: '8.5.26' }];
+      const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+      expect(results[0].success).toBe(true);
+      expect(results[0].resolvedVersion).toBe('8.5.30');
+    });
+
+    it('reports "could not verify" — not silent success — when no method can find the package at all', async () => {
+      const dir = makeTmpDir('hexops-apply-inconclusive-');
+      writePkgJson(dir, { name: 'proj', version: '1.0.0' });
+      // Filesystem probe empty AND the pnpm list fallback comes back empty
+      // too (e.g. `pnpm list <pkg>` finds no matching dependency path).
+      execAsyncMock.mockResolvedValue({ stdout: '[]', stderr: '' });
+
+      const pkgs: UpdatePackage[] = [{ name: 'postcss', fromVersion: '8.5.15', targetVersion: '8.5.26' }];
+      const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+      expect(results[0].success).toBe(true); // inconclusive is not treated as a hard failure
+      expect(results[0].resolvedVersion).toBeUndefined();
+      expect(results[0].output).toMatch(/could not verify postcss's resolved version/);
+      expect(logger.warn).toHaveBeenCalledWith(
+        'patches',
+        'override_verify_inconclusive',
+        expect.any(String),
+        expect.objectContaining({ meta: expect.objectContaining({ package: 'postcss' }) }),
+      );
+    });
+
+    it('the anyResolved install-failure fallback also finds a .pnpm-store-only copy (not just root)', async () => {
+      const dir = makeTmpDir('hexops-apply-failrecover-pnpmstore-');
+      writePkgJson(dir, { name: 'proj', version: '1.0.0' });
+      // No root copy — only the isolated-linker .pnpm store has it.
+      writePnpmStoreVersion(dir, 'postcss', '8.5.30');
+      execAsyncMock.mockRejectedValueOnce({ stdout: '', stderr: 'postinstall script warning', message: 'Command failed' });
+
+      const pkgs: UpdatePackage[] = [{ name: 'postcss', fromVersion: '8.5.15', targetVersion: '8.5.26' }];
+      const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+      expect(results[0].success).toBe(true);
+    });
   });
 
   it('preserves the project package.json indentation style', async () => {

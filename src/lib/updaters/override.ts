@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import semver from 'semver';
 import { execAsync, NPM_INSTALL_TIMEOUT, type UpdatePackage, type UpdateResult } from './common';
@@ -50,10 +50,16 @@ export function toFloorRange(version: string): string {
   return parsed ? `>=${parsed}` : version;
 }
 
+/** The range applyOverrides actually wrote for a target, parsed for satisfaction checks. */
+function writtenRangeInfo(targetVersion: string): { writtenRange: string; range: string | null } {
+  const writtenRange = toFloorRange(targetVersion);
+  return { writtenRange, range: semver.validRange(writtenRange, { loose: true }) };
+}
+
 /**
- * Whether an installed version satisfies the override value applyOverrides
- * actually wrote for this target — `toFloorRange(targetVersion)` — rather
- * than a plain "installed >= target" scalar comparison.
+ * Whether a single installed version satisfies the override value
+ * applyOverrides actually wrote for this target — `toFloorRange(targetVersion)`
+ * — rather than a plain "installed >= target" scalar comparison.
  *
  * This exists to verify the override actually took effect. A plain scalar
  * comparison is too permissive for that job: a keyed pnpm override
@@ -69,12 +75,163 @@ export function toFloorRange(version: string): string {
  * parseable range (dist-tag targets like "latest"), matching the pre-floor
  * behavior.
  */
-function satisfiesWrittenOverride(installedVersion: string | undefined, targetVersion: string): boolean {
-  if (!installedVersion) return false;
-  const written = toFloorRange(targetVersion);
-  const range = semver.validRange(written, { loose: true });
+function versionSatisfiesTarget(installedVersion: string, targetVersion: string): boolean {
+  const { range } = writtenRangeInfo(targetVersion);
   if (range) return semver.satisfies(installedVersion, range, { loose: true });
   return installedVersion === targetVersion;
+}
+
+/** Every installed version, among a set of candidates, that does NOT satisfy the written override. */
+function findViolatingVersions(installedVersions: string[], targetVersion: string): string[] {
+  return installedVersions.filter(v => !versionSatisfiesTarget(v, targetVersion));
+}
+
+function readVersionField(pkgJsonPath: string): string | undefined {
+  try {
+    if (!existsSync(pkgJsonPath)) return undefined;
+    const parsed = JSON.parse(readFileSync(pkgJsonPath, 'utf-8'));
+    return typeof parsed?.version === 'string' ? parsed.version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * pnpm's default node-linker (`isolated`) does not create a root
+ * `node_modules/<pkg>` entry for a purely-transitive package — it lives in
+ * the content-addressable `.pnpm` virtual store instead, at
+ * `node_modules/.pnpm/<name>@<version>[_peerHash]/node_modules/<name>/package.json`
+ * (scoped names have their "/" replaced with "+" in the store directory
+ * name — confirmed against this repo's own `pnpm list --json` output, e.g.
+ * `@vitest/ui` stores as `.pnpm/@vitest+ui@4.1.9_.../node_modules/@vitest/ui`).
+ * A root-only `existsSync` check is a silent no-op for exactly this layout —
+ * confirmed against a real fleet project (bosun-super-admin) that uses
+ * pnpm's default isolated linker and has no root `node_modules/postcss` at
+ * all. hexops's own `.npmrc` forces `node-linker=hoisted` (a node-pty
+ * workaround), which is why this blind spot never surfaced in local
+ * development.
+ *
+ * Collects every distinct version found in the store, not just the first —
+ * the store can (and does) hold multiple copies of the same package at
+ * different versions simultaneously. Stopping at the first hit would miss
+ * exactly the "top-level fix, vulnerable nested copy survives" class this
+ * project already tracks as issue #80.
+ */
+function findPnpmStoreVersions(cwd: string, pkgName: string): string[] {
+  const storeDir = join(cwd, 'node_modules', '.pnpm');
+  if (!existsSync(storeDir)) return [];
+  let entries: string[];
+  try {
+    entries = readdirSync(storeDir);
+  } catch {
+    return [];
+  }
+  const prefix = `${pkgName.replace('/', '+')}@`;
+  const versions = new Set<string>();
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix)) continue;
+    const v = readVersionField(join(storeDir, entry, 'node_modules', pkgName, 'package.json'));
+    if (v) versions.add(v);
+  }
+  return Array.from(versions);
+}
+
+/**
+ * Every distinct installed version of a package this function can find on
+ * disk, across every layout it knows how to read: the flat root
+ * `node_modules` (npm/yarn, and pnpm's hoisted node-linker) and pnpm's
+ * isolated-linker `.pnpm` virtual store. Synchronous and filesystem-only —
+ * no package-manager queries — so it's safe to call from both the
+ * install-failure fallback and the main verification path.
+ *
+ * Deliberately does NOT walk arbitrary nested
+ * `node_modules/<parent>/node_modules/<pkg>` paths (the npm/yarn nested-copy
+ * shape). That's a materially larger surface already handled elsewhere in
+ * this codebase for a different purpose — see `resolveInstalledVersion` in
+ * patch-scanner.ts, which uses npm audit's `nodes` hints to target specific
+ * nested paths flagged by an audit run. Reimplementing a full recursive walk
+ * here, for a verification step that only needs to confirm an override
+ * took effect, would be a much bigger change than this fix calls for.
+ */
+function findAllInstalledVersions(cwd: string, pkgName: string): { root?: string; all: string[] } {
+  const root = readVersionField(join(cwd, 'node_modules', pkgName, 'package.json'));
+  const all = new Set<string>(findPnpmStoreVersions(cwd, pkgName));
+  if (root) all.add(root);
+  return { root, all: Array.from(all) };
+}
+
+/**
+ * Last-resort fallback when the filesystem probe (root + `.pnpm` store)
+ * finds nothing at all. That can genuinely mean the override never took
+ * effect, but it can also mean a custom store location, a workspace
+ * hoisting pattern, or some other layout this file doesn't know how to
+ * read filesystem-side. Only attempted for pnpm — the concretely-identified
+ * blind spot (bosun-super-admin) — not npm/yarn: those always hoist flatly
+ * by design, so the root `node_modules` check already covers the
+ * overwhelming majority of real layouts there, and taking on `npm ls`
+ * output-parsing quirks wasn't warranted for this fix.
+ *
+ * Parses `pnpm list <pkg> --json --depth Infinity` by walking
+ * `dependencies`/`devDependencies`/`optionalDependencies` at every level and
+ * collecting `.version` only where the enclosing key equals the package
+ * name being looked up (verified against this repo's own real output —
+ * blindly collecting every "version" field anywhere in the tree would also
+ * pick up unrelated ancestor packages' own versions).
+ */
+async function queryPnpmForVersions(cwd: string, pkgName: string): Promise<string[]> {
+  try {
+    const { stdout } = await execAsync(`pnpm list ${pkgName} --json --depth Infinity`, { cwd, timeout: 15000 });
+    const versions = new Set<string>();
+    const visit = (node: unknown, key?: string): void => {
+      if (Array.isArray(node)) {
+        for (const item of node) visit(item, key);
+        return;
+      }
+      if (!node || typeof node !== 'object') return;
+      const obj = node as Record<string, unknown>;
+      if (key === pkgName && typeof obj.version === 'string' && semver.valid(obj.version, { loose: true })) {
+        versions.add(obj.version);
+      }
+      for (const depsField of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+        const deps = obj[depsField];
+        if (deps && typeof deps === 'object') {
+          for (const [depName, depNode] of Object.entries(deps as Record<string, unknown>)) {
+            visit(depNode, depName);
+          }
+        }
+      }
+    };
+    visit(JSON.parse(stdout));
+    return Array.from(versions);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Full resolved-version lookup used by the post-install verification path:
+ * filesystem probe first (root + `.pnpm` store, covers the concretely
+ * identified isolated-linker blind spot), then a `pnpm list` fallback only
+ * when the filesystem probe is completely empty. `verified: false` means
+ * neither method found anything — genuinely inconclusive, not "assume fine"
+ * and not "assume failed". Callers must handle that state explicitly rather
+ * than letting it fall through as a silent pass, which is the exact defect
+ * this replaces (a bare `existsSync(node_modules/<pkg>)` check that quietly
+ * no-ops — no warning, `success: true` — on any project using pnpm's
+ * default isolated linker).
+ */
+async function resolveInstalledVersions(
+  cwd: string,
+  pkgName: string,
+  packageManager: string,
+): Promise<{ root?: string; versions: string[]; verified: boolean }> {
+  const fsResult = findAllInstalledVersions(cwd, pkgName);
+  if (fsResult.all.length > 0) return { root: fsResult.root, versions: fsResult.all, verified: true };
+  if (packageManager === 'pnpm') {
+    const cliVersions = await queryPnpmForVersions(cwd, pkgName);
+    if (cliVersions.length > 0) return { root: undefined, versions: cliVersions, verified: true };
+  }
+  return { root: undefined, versions: [], verified: false };
 }
 
 /** Remove override/resolution entries that conflict with a direct-dep update. */
@@ -288,19 +445,27 @@ export async function applyOverrides(
       installOutput = `$ ${installCmd}\n${err.stdout || ''}${err.stderr || ''}`;
       const anyResolved = overridePkgs.some(pkg => {
         try {
-          const p = join(cwd, 'node_modules', pkg.name, 'package.json');
-          if (!existsSync(p)) return false;
-          const installedVersion = JSON.parse(readFileSync(p, 'utf-8')).version;
-          // A version on disk that's identical to what was installed BEFORE
-          // this override ran is not evidence the install succeeded — it's
-          // evidence the install failed and left the pre-existing tree
-          // untouched. Without this guard, a failed install (registry 5xx,
-          // ERESOLVE, disk full) with a stale-but-already-satisfying copy in
-          // node_modules would get silently swallowed here, every package in
-          // this batch would report success, and the caller would go on to
-          // reconcile/audit a tree whose install never actually completed.
-          if (pkg.fromVersion && installedVersion === pkg.fromVersion) return false;
-          return satisfiesWrittenOverride(installedVersion, pkg.targetVersion);
+          // Filesystem-only probe (root + pnpm's .pnpm store) — no CLI
+          // fallback here. This runs only after the install command itself
+          // already failed; on ambiguity it's safer for this specific path
+          // to fall through to "not resolved" (favoring reporting the
+          // failure) than to spend another child-process round-trip trying
+          // to rescue an already-failing install.
+          const { all } = findAllInstalledVersions(cwd, pkg.name);
+          return all.some(v => {
+            // A version on disk that's identical to what was installed
+            // BEFORE this override ran is not evidence the install
+            // succeeded — it's evidence the install failed and left the
+            // pre-existing tree untouched. Without this guard, a failed
+            // install (registry 5xx, ERESOLVE, disk full) with a
+            // stale-but-already-satisfying copy already in node_modules
+            // would get silently swallowed here, every package in this
+            // batch would report success, and the caller would go on to
+            // reconcile/audit a tree whose install never actually
+            // completed.
+            if (pkg.fromVersion && v === pkg.fromVersion) return false;
+            return versionSatisfiesTarget(v, pkg.targetVersion);
+          });
         } catch { return false; }
       });
       if (!anyResolved) throw new Error(err.stderr || err.message || 'Install after override failed');
@@ -308,40 +473,79 @@ export async function applyOverrides(
 
     for (const pkg of overridePkgs) {
       let verifyWarning = '';
+      let resolvedVersion: string | undefined;
+      const { writtenRange } = writtenRangeInfo(pkg.targetVersion);
       try {
-        const installedPkgPath = join(cwd, 'node_modules', pkg.name, 'package.json');
-        if (existsSync(installedPkgPath)) {
-          const installedVersion = JSON.parse(readFileSync(installedPkgPath, 'utf-8')).version;
-          // With a `>=` floor written instead of an exact pin, resolving to
-          // something newer than the target is success, not a mismatch — the
-          // floor did its job. But this still has to be a real check, not a
-          // rubber stamp: compare against the range actually written
-          // (satisfiesWrittenOverride), not a bare "installed >= target"
-          // scalar, so a genuine mismatch (a keyed override, workspace
-          // catalog, or parent constraint steering resolution outside what
-          // we wrote) is still caught — see project issue #126, where a bare
-          // `>=` previously failed to move the resolved version under
-          // pnpm's node-linker=hoisted and this check is the only thing that
-          // detects that.
-          if (!satisfiesWrittenOverride(installedVersion, pkg.targetVersion)) {
-            verifyWarning = ` ⚠ override written but ${pkg.name} resolved to ${installedVersion} — may need lockfile reset`;
-            logger.warn('patches', 'override_version_mismatch', `Override for ${pkg.name}: expected ${pkg.targetVersion}, got ${installedVersion}`, {
+        // Isolated-layout-aware lookup (root node_modules, then the .pnpm
+        // store, then — for pnpm only — a `pnpm list` fallback). This is
+        // the only mechanism that catches project issue #126 (a bare
+        // floor failing to move the resolved version), so it has to
+        // actually run on the layout the project uses, not just the
+        // hoisted layout this worktree happens to force via .npmrc.
+        const probe = await resolveInstalledVersions(cwd, pkg.name, packageManager);
+
+        if (!probe.verified) {
+          // Could not find this package by ANY method — root, .pnpm store,
+          // or (for pnpm) a live query. This must be surfaced as "couldn't
+          // verify", not silently folded into "no warning = fine". Treating
+          // an inconclusive probe as success is exactly the defect being
+          // fixed: a root-only existsSync check that quietly no-ops on any
+          // project using pnpm's default isolated linker.
+          verifyWarning = ` ⚠ could not verify ${pkg.name}'s resolved version on disk (checked root node_modules and the pnpm store) — check manually`;
+          logger.warn('patches', 'override_verify_inconclusive', `Could not determine an installed version for ${pkg.name} after applying override ${writtenRange} — checked root node_modules and the pnpm store, found nothing`, {
+            projectId,
+            meta: { package: pkg.name, targetVersion: pkg.targetVersion, writtenRange },
+          });
+        } else {
+          resolvedVersion = probe.root ?? probe.versions.slice().sort(semver.rcompare)[0];
+
+          // Check EVERY discovered copy, not just the one being reported —
+          // the .pnpm store (or, in principle, a nested npm copy) can hold
+          // several versions of the same package at once, and a floor
+          // satisfied at the root with a vulnerable copy still nested
+          // elsewhere is exactly the false-clear class this project already
+          // tracks as issue #80.
+          const violating = findViolatingVersions(probe.versions, pkg.targetVersion);
+
+          if (violating.length > 0) {
+            verifyWarning = ` ⚠ override written but ${pkg.name} resolved to ${violating.join(', ')} (does not satisfy ${writtenRange}) — may need lockfile reset`;
+            logger.warn('patches', 'override_version_mismatch', `Override for ${pkg.name}: expected ${writtenRange}, found violating cop${violating.length === 1 ? 'y' : 'ies'}: ${violating.join(', ')}`, {
               projectId,
-              meta: { package: pkg.name, expected: pkg.targetVersion, actual: installedVersion },
+              meta: { package: pkg.name, expected: pkg.targetVersion, writtenRange, violatingVersions: violating, allVersions: probe.versions },
             });
+          } else if (resolvedVersion) {
+            // Satisfies the floor — not a failure. But a resolved major
+            // beyond the one that was targeted is exactly the kind of event
+            // a bare `>=` floor (no ceiling, by owner decision) makes
+            // possible and that someone should see surfaced in the patch
+            // log, not buried silently in a routine "applied" entry.
+            const targetSemver = semver.valid(pkg.targetVersion, { loose: true });
+            if (targetSemver) {
+              const resolvedMajor = semver.major(resolvedVersion);
+              const targetMajor = semver.major(targetSemver);
+              if (resolvedMajor > targetMajor) {
+                logger.warn('patches', 'override_major_jump', `Override for ${pkg.name}: requested ${writtenRange}, resolved to ${resolvedVersion} — a newer major (${resolvedMajor}) than targeted (${targetMajor})`, {
+                  projectId,
+                  meta: { package: pkg.name, expected: pkg.targetVersion, resolvedVersion, targetMajor, resolvedMajor },
+                });
+              }
+            }
           }
         }
       } catch { /* non-fatal */ }
 
+      const resolvedNote = resolvedVersion ? `, resolved ${resolvedVersion}` : '';
+
       results.push({
         package: pkg.name,
         success: true,
-        output: `Applied override: ${pkg.name}@${pkg.targetVersion}${verifyWarning}\n${installOutput}`,
+        output: `Applied override: ${pkg.name}@${writtenRange}${resolvedNote}${verifyWarning}\n${installOutput}`,
+        resolvedVersion,
       });
 
-      logger.info('patches', 'override_applied', `Applied override for ${pkg.name}@${pkg.targetVersion}`, {
+      logger.info('patches', 'override_applied', `Applied override for ${pkg.name}@${writtenRange}${resolvedNote}`, {
         projectId,
-        meta: { package: pkg.name, fromVersion: pkg.fromVersion || 'unknown', toVersion: pkg.targetVersion, packageManager, mechanism: 'override' },
+        meta: { package: pkg.name, fromVersion: pkg.fromVersion || 'unknown', toVersion: pkg.targetVersion, resolvedVersion, packageManager, mechanism: 'override' },
       });
 
       addPatchHistoryEntry({
@@ -351,10 +555,11 @@ export async function applyOverrides(
         package: pkg.name,
         fromVersion: pkg.fromVersion || 'unknown',
         toVersion: pkg.targetVersion,
+        resolvedVersion,
         updateType: pkg.fromVersion ? getUpdateType(pkg.fromVersion, pkg.targetVersion) : 'patch',
         trigger: 'manual',
         success: true,
-        output: `Override applied: ${pkg.name}@${pkg.targetVersion}${verifyWarning}`,
+        output: `Override applied: ${pkg.name}@${writtenRange}${resolvedNote}${verifyWarning}`,
       });
     }
   } catch (err) {
