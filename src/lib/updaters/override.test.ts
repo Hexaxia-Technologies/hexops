@@ -306,6 +306,75 @@ describe('applyOverrides', () => {
 
       expect(results[0].success).toBe(true); // a floor violation still isn't "success: false" territory
       expect(results[0].output).toMatch(/resolved to 8\.4\.31 \(does not satisfy >=8\.5\.26\) — may need lockfile reset/);
+      // The structured field must not read as clean when a violating copy
+      // exists — it reports the worst (most vulnerable) offender, not
+      // whichever copy happens to be "root" or highest.
+      expect(results[0].resolvedVersion).toBe('8.4.31');
+    });
+
+    it('does not silently discard violations when one of the copies has an unparseable version field', async () => {
+      const dir = makeTmpDir('hexops-apply-pnpmstore-garbage-');
+      writePkgJson(dir, { name: 'proj', version: '1.0.0' });
+      // A non-semver `version` field (malformed package.json, a vendor
+      // fork, etc.) used to make `probe.versions.sort(semver.rcompare)`
+      // THROW once a second, differently-shaped copy existed — and that
+      // throw was swallowed by this function's outer catch-all, discarding
+      // the fact that NEITHER copy satisfies the floor along with it:
+      // silent `success: true`, no warning, nothing. That's strictly worse
+      // than the pre-fix existsSync no-op, because the violating versions
+      // were in hand and got thrown away instead of reported.
+      writePnpmStoreVersion(dir, 'weird', '1.0');
+      writePnpmStoreVersion(dir, 'weird', '1.5.0', '_extra');
+
+      const pkgs: UpdatePackage[] = [{ name: 'weird', targetVersion: '2.0.0' }];
+      const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+      expect(results[0].success).toBe(true); // still not a hard failure — see other tests for that distinction
+      expect(results[0].output).toMatch(/may need lockfile reset/);
+      expect(logger.warn).toHaveBeenCalledWith(
+        'patches',
+        'override_version_mismatch',
+        expect.any(String),
+        expect.objectContaining({ meta: expect.objectContaining({ package: 'weird' }) }),
+      );
+    });
+
+    it('does not throw when a lone unparseable version field is the ONLY copy found', async () => {
+      // Array.prototype.sort never invokes its comparator for a
+      // single-element array, so a lone garbage version was already safe
+      // before this fix — this test pins that it stays safe after the
+      // rewrite too (parseable-filtering must not turn "one weird copy"
+      // into "inconclusive" or throw).
+      const dir = makeTmpDir('hexops-apply-pnpmstore-garbage-single-');
+      writePkgJson(dir, { name: 'proj', version: '1.0.0' });
+      writePnpmStoreVersion(dir, 'weird', 'not-a-version');
+
+      const pkgs: UpdatePackage[] = [{ name: 'weird', targetVersion: '2.0.0' }];
+      const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+      expect(results[0].success).toBe(true);
+      expect(results[0].output).toMatch(/may need lockfile reset/);
+    });
+
+    it('does not match a package name that is merely a prefix of another (postcss vs postcss-import)', async () => {
+      const dir = makeTmpDir('hexops-apply-prefix-collision-');
+      writePkgJson(dir, { name: 'proj', version: '1.0.0' });
+      // Only prefix-colliding packages exist in the store — `postcss` itself
+      // was never installed. The trailing "@" in the match prefix must
+      // prevent "postcss-import@1.0.0" / "postcss-js@2.0.0" from being
+      // mistaken for a copy of "postcss".
+      writePnpmStoreVersion(dir, 'postcss-import', '1.0.0');
+      writePnpmStoreVersion(dir, 'postcss-js', '2.0.0');
+      // No CLI fallback data either — filesystem probe genuinely has nothing
+      // for "postcss".
+      execAsyncMock.mockResolvedValue({ stdout: '[]', stderr: '' });
+
+      const pkgs: UpdatePackage[] = [{ name: 'postcss', targetVersion: '8.5.26' }];
+      const results = await applyOverrides(pkgs, 'pnpm', dir, 'test-project');
+
+      expect(results[0].success).toBe(true); // inconclusive is not a hard failure
+      expect(results[0].resolvedVersion).toBeUndefined();
+      expect(results[0].output).toMatch(/could not verify postcss's resolved version/);
     });
 
     it('falls back to `pnpm list --json` when the filesystem probe (root + .pnpm store) finds nothing', async () => {

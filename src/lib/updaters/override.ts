@@ -86,6 +86,38 @@ function findViolatingVersions(installedVersions: string[], targetVersion: strin
   return installedVersions.filter(v => !versionSatisfiesTarget(v, targetVersion));
 }
 
+/**
+ * Pick a single representative version out of a set of discovered copies —
+ * used both to report "what resolved" after an override and to read "what's
+ * currently installed" before one. Prefers the root copy when it's a
+ * parseable version (most representative of what a plain
+ * `node_modules/<pkg>` look would show); otherwise the highest of the
+ * remaining copies.
+ *
+ * Filters to parseable semver BEFORE sorting, and does not trust `root`
+ * blindly either. This matters: `semver.rcompare`/`semver.compare` and
+ * `semver.major` all THROW on an unparseable version, while
+ * `Array.prototype.sort` never invokes its comparator for a single-element
+ * array — so a lone garbage `version` field was silently accepted and only
+ * a *second*, differently-shaped copy would trigger the throw. That throw
+ * was getting swallowed by this file's catch-all, discarding every
+ * already-computed violating version along with it and leaving
+ * `resolvedVersion: undefined`, `success: true`, no warning at all — worse
+ * than the pre-fix `existsSync` no-op, because the violating versions were
+ * in hand and got thrown away instead of reported.
+ */
+export function pickPrimaryVersion(root: string | undefined, all: string[]): string | undefined {
+  if (root && semver.valid(root, { loose: true })) return root;
+  const parseable = all.filter(v => semver.valid(v, { loose: true }));
+  return parseable.length > 0 ? parseable.slice().sort(semver.rcompare)[0] : undefined;
+}
+
+/** The lowest (most vulnerable) parseable version among a set — used to report a representative offender when copies violate the floor. */
+function worstVersion(versions: string[]): string | undefined {
+  const parseable = versions.filter(v => semver.valid(v, { loose: true }));
+  return parseable.length > 0 ? parseable.slice().sort(semver.compare)[0] : undefined;
+}
+
 function readVersionField(pkgJsonPath: string): string | undefined {
   try {
     if (!existsSync(pkgJsonPath)) return undefined;
@@ -116,6 +148,17 @@ function readVersionField(pkgJsonPath: string): string | undefined {
  * different versions simultaneously. Stopping at the first hit would miss
  * exactly the "top-level fix, vulnerable nested copy survives" class this
  * project already tracks as issue #80.
+ *
+ * Only looks at `<cwd>/node_modules/.pnpm`. In a monorepo/workspace, the
+ * `.pnpm` store typically lives at the workspace root, not inside an
+ * individual workspace member's directory — if `cwd` here is a workspace
+ * member rather than the root, this returns `[]` for a package that's
+ * genuinely installed, and callers fall through to the `pnpm list` CLI
+ * fallback (which runs from the same `cwd` but asks pnpm itself, so it
+ * isn't subject to this same-directory limitation). Not fixed here because
+ * `applyOverrides`/`removeOverrideConflicts`/`cleanStaleOverrides` all
+ * already operate per-project on a single `cwd` with no workspace-root
+ * concept threaded through this file.
  */
 function findPnpmStoreVersions(cwd: string, pkgName: string): string[] {
   const storeDir = join(cwd, 'node_modules', '.pnpm');
@@ -153,7 +196,7 @@ function findPnpmStoreVersions(cwd: string, pkgName: string): string[] {
  * here, for a verification step that only needs to confirm an override
  * took effect, would be a much bigger change than this fix calls for.
  */
-function findAllInstalledVersions(cwd: string, pkgName: string): { root?: string; all: string[] } {
+export function findAllInstalledVersions(cwd: string, pkgName: string): { root?: string; all: string[] } {
   const root = readVersionField(join(cwd, 'node_modules', pkgName, 'package.json'));
   const all = new Set<string>(findPnpmStoreVersions(cwd, pkgName));
   if (root) all.add(root);
@@ -180,7 +223,15 @@ function findAllInstalledVersions(cwd: string, pkgName: string): { root?: string
  */
 async function queryPnpmForVersions(cwd: string, pkgName: string): Promise<string[]> {
   try {
-    const { stdout } = await execAsync(`pnpm list ${pkgName} --json --depth Infinity`, { cwd, timeout: 15000 });
+    // promisify(exec) defaults to a 1 MB stdout buffer. Measured on this
+    // repo, `pnpm list react --json --depth Infinity` alone is 237 KB —
+    // a monorepo resolving several packages this deep would exceed 1 MB
+    // and get its child process killed, silently degrading this fallback
+    // to "could not verify" on exactly the large projects it exists to
+    // help. Match the maxBuffer convention already used by other
+    // JSON-producing execAsync calls in this codebase (cve-lite-db.ts,
+    // security/override-audit.ts — 64 MB).
+    const { stdout } = await execAsync(`pnpm list ${pkgName} --json --depth Infinity`, { cwd, timeout: 15000, maxBuffer: 64 * 1024 * 1024 });
     const versions = new Set<string>();
     const visit = (node: unknown, key?: string): void => {
       if (Array.isArray(node)) {
@@ -497,23 +548,41 @@ export async function applyOverrides(
             meta: { package: pkg.name, targetVersion: pkg.targetVersion, writtenRange },
           });
         } else {
-          resolvedVersion = probe.root ?? probe.versions.slice().sort(semver.rcompare)[0];
-
-          // Check EVERY discovered copy, not just the one being reported —
-          // the .pnpm store (or, in principle, a nested npm copy) can hold
-          // several versions of the same package at once, and a floor
-          // satisfied at the root with a vulnerable copy still nested
-          // elsewhere is exactly the false-clear class this project already
-          // tracks as issue #80.
+          // Check EVERY discovered copy BEFORE deciding what to report as
+          // "the" resolved version — the .pnpm store (or, in principle, a
+          // nested npm copy) can hold several versions of the same package
+          // at once, and a floor satisfied at the root with a vulnerable
+          // copy still nested elsewhere is exactly the false-clear class
+          // this project already tracks as issue #80. Computing this first,
+          // and choosing resolvedVersion based on the outcome, also avoids
+          // a subtler version of the same false-clear: if resolvedVersion
+          // were picked independently (e.g. "root, or else the highest
+          // copy") it could report a clean-looking version even when a
+          // different, violating copy is what actually got flagged below —
+          // the structured field must not read as clean when a violating
+          // copy exists.
           const violating = findViolatingVersions(probe.versions, pkg.targetVersion);
 
           if (violating.length > 0) {
+            // Report the worst (most vulnerable) violator as the
+            // structured resolvedVersion, not the best-looking copy — a
+            // consumer filtering history on this field should see the
+            // problem, not a false clear. pickPrimaryVersion/worstVersion
+            // both filter to parseable semver before sorting: an
+            // unparseable `version` field must not crash this block and
+            // silently discard every violation already found (see the
+            // pickPrimaryVersion doc comment for how that happened before).
+            resolvedVersion = worstVersion(violating);
             verifyWarning = ` ⚠ override written but ${pkg.name} resolved to ${violating.join(', ')} (does not satisfy ${writtenRange}) — may need lockfile reset`;
             logger.warn('patches', 'override_version_mismatch', `Override for ${pkg.name}: expected ${writtenRange}, found violating cop${violating.length === 1 ? 'y' : 'ies'}: ${violating.join(', ')}`, {
               projectId,
               meta: { package: pkg.name, expected: pkg.targetVersion, writtenRange, violatingVersions: violating, allVersions: probe.versions },
             });
-          } else if (resolvedVersion) {
+          } else {
+            resolvedVersion = pickPrimaryVersion(probe.root, probe.versions);
+          }
+
+          if (violating.length === 0 && resolvedVersion && semver.valid(resolvedVersion, { loose: true })) {
             // Satisfies the floor — not a failure. But a resolved major
             // beyond the one that was targeted is exactly the kind of event
             // a bare `>=` floor (no ceiling, by owner decision) makes
