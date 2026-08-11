@@ -62,7 +62,10 @@ export function SourceStrip({ projectId, sources, onRescan }: Props) {
           {r.error && r.status === 'skipped' && (
             <span className="text-sky-400" title={r.error}>· skipped</span>
           )}
-          {r.error && r.status !== 'skipped' && (
+          {r.error && r.status === 'misconfigured' && (
+            <span className="text-red-400" title={r.error}>· misconfigured</span>
+          )}
+          {r.error && r.status !== 'skipped' && r.status !== 'misconfigured' && (
             <span className="text-red-400" title={r.error}>· error</span>
           )}
         </span>

@@ -1,4 +1,4 @@
-import { existsSync } from 'fs';
+import { existsSync, statSync, accessSync, constants } from 'fs';
 import type { ProjectConfig } from '../types';
 import { ScanSkippedError, type Finding, type ScanResult, type ScanSource, type SourceResult, type SourceStatus } from './types';
 import { mergeFindings } from './merger';
@@ -97,6 +97,42 @@ function buildMisconfiguredResult(sourceId: string, message: string): SourceResu
   };
 }
 
+/**
+ * Pre-flight check for the configured project path. Distinguishes the three
+ * ways a path can be unusable so `misconfigured` actually matches its own
+ * doc comment in types.ts ("doesn't exist or isn't readable") instead of
+ * silently falling through to a generic per-source `failed` for anything
+ * `existsSync` alone can't catch — a path that exists but is a file, or one
+ * that exists but the process can't read.
+ *
+ * `existsSync` follows symlinks and returns false for a broken symlink, so
+ * that case is already correctly reported as "does not exist" — no special
+ * handling needed here.
+ */
+function checkProjectPath(path: string): { ok: true } | { ok: false; message: string } {
+  if (!existsSync(path)) {
+    return { ok: false, message: `Configured project path does not exist: ${path}` };
+  }
+  let stat: ReturnType<typeof statSync>;
+  try {
+    stat = statSync(path);
+  } catch (err) {
+    return {
+      ok: false,
+      message: `Configured project path could not be inspected: ${path} (${err instanceof Error ? err.message : String(err)})`,
+    };
+  }
+  if (!stat.isDirectory()) {
+    return { ok: false, message: `Configured project path exists but is not a directory: ${path}` };
+  }
+  try {
+    accessSync(path, constants.R_OK);
+  } catch {
+    return { ok: false, message: `Configured project path exists but is not readable: ${path}` };
+  }
+  return { ok: true };
+}
+
 export async function scanProjectWithSources(project: ProjectConfig, sources: ScanSource[]): Promise<ScanResult> {
   const existing = inflight.get(project.id);
   if (existing) return existing;
@@ -106,11 +142,10 @@ export async function scanProjectWithSources(project: ProjectConfig, sources: Sc
     const perSource = new Map<string, Finding[]>();
     const sourcesRecord: Record<string, SourceResult> = {};
 
-    const pathMissing = !existsSync(project.path);
-    if (pathMissing) {
-      const message = `Configured project path does not exist: ${project.path}`;
+    const pathCheck = checkProjectPath(project.path);
+    if (!pathCheck.ok) {
       for (const s of sources) {
-        sourcesRecord[s.id] = buildMisconfiguredResult(s.id, message);
+        sourcesRecord[s.id] = buildMisconfiguredResult(s.id, pathCheck.message);
         perSource.set(s.id, []);
       }
     } else {

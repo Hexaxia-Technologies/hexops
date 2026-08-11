@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { _setCacheDirForTest } from './persistence';
@@ -188,5 +188,35 @@ describe('runner.scanProjectWithSources', () => {
     };
     await scanProjectWithSources(missingPathProject, [spySource]);
     expect(called).toBe(false);
+  });
+
+  it('records misconfigured (not "failed") when the configured path exists but is a file, not a directory', async () => {
+    const filePath = join(dir, 'not-a-directory.txt');
+    writeFileSync(filePath, 'hello');
+    const fileProject: ProjectConfig = { ...project, id: 'file-path-project', path: filePath };
+    const result = await scanProjectWithSources(fileProject, [source('s1', { findings: [] })]);
+    expect(result.sources.s1.status).toBe('misconfigured');
+    expect(result.sources.s1.error).toContain('not a directory');
+    expect(result.sources.s1.error).toContain(filePath);
+  });
+
+  it('records misconfigured when the configured path exists but is not readable', async () => {
+    // Skipped when running as root: root bypasses directory read permission
+    // bits entirely, so accessSync(R_OK) would succeed and this fixture
+    // would silently exercise the wrong branch instead of proving anything.
+    if (process.getuid && process.getuid() === 0) {
+      return;
+    }
+    const unreadableDir = join(dir, 'unreadable');
+    mkdirSync(unreadableDir);
+    chmodSync(unreadableDir, 0o000);
+    try {
+      const unreadableProject: ProjectConfig = { ...project, id: 'unreadable-path-project', path: unreadableDir };
+      const result = await scanProjectWithSources(unreadableProject, [source('s1', { findings: [] })]);
+      expect(result.sources.s1.status).toBe('misconfigured');
+      expect(result.sources.s1.error).toContain('not readable');
+    } finally {
+      chmodSync(unreadableDir, 0o755);
+    }
   });
 });
