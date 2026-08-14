@@ -1,15 +1,19 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { _setCacheDirForTest } from './persistence';
 import { _setFindingStatesDirForTest } from './finding-states';
 import { scanProjectWithSources, _runOneForTest } from './runner';
-import type { ScanSource, Finding } from './types';
+import { ScanSkippedError, type ScanSource, type Finding } from './types';
 import type { ProjectConfig } from '../types';
 
+// project.path must exist on disk — scanProjectWithSources now does a
+// pre-flight existsSync(project.path) check before running any source.
+const projectPath = '/tmp/hexops-runner-test-p1';
+mkdirSync(projectPath, { recursive: true });
 const project: ProjectConfig = {
-  id: 'p1', name: 'P1', path: '/tmp/p1', port: 3000, category: 'Internal',
+  id: 'p1', name: 'P1', path: projectPath, port: 3000, category: 'Internal',
   scripts: { dev: 'pnpm dev', build: 'pnpm build' },
 };
 
@@ -136,5 +140,83 @@ describe('runner.scanProjectWithSources', () => {
     };
     const { result } = await _runOneForTest(source, { id: 'p', name: 'p', path: '/tmp' } as ProjectConfig);
     expect(result.warning).toBeUndefined();
+  });
+
+  it('records skipped status (not failed) when a source throws ScanSkippedError', async () => {
+    const source: ScanSource = {
+      id: 'nothing-to-scan',
+      displayName: 'Nothing To Scan',
+      findingTypes: ['vulnerability'],
+      isAvailable: async () => true,
+      scan: async () => { throw new ScanSkippedError('No scannable packages found under /proj'); },
+    };
+    const { result } = await _runOneForTest(source, { id: 'p', name: 'p', path: '/tmp' } as ProjectConfig);
+    expect(result.status).toBe('skipped');
+    expect(result.error).toBe('No scannable packages found under /proj');
+    expect(result.findingCount).toBe(0);
+  });
+
+  it('records misconfigured status for every source when the project path does not exist', async () => {
+    const missingPathProject: ProjectConfig = {
+      ...project,
+      id: 'missing-path-project',
+      path: '/tmp/hexops-runner-test-path-does-not-exist',
+    };
+    const result = await scanProjectWithSources(missingPathProject, [
+      source('s1', { findings: [] }),
+      source('s2', { findings: [] }),
+    ]);
+    expect(result.sources.s1.status).toBe('misconfigured');
+    expect(result.sources.s2.status).toBe('misconfigured');
+    expect(result.sources.s1.error).toContain(missingPathProject.path);
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it('does not call isAvailable/scan on any source when the project path is missing', async () => {
+    let called = false;
+    const spySource: ScanSource = {
+      id: 'spy',
+      displayName: 'Spy',
+      findingTypes: ['vulnerability'],
+      isAvailable: async () => { called = true; return true; },
+      scan: async () => ({ findings: [] }),
+    };
+    const missingPathProject: ProjectConfig = {
+      ...project,
+      id: 'missing-path-project-2',
+      path: '/tmp/hexops-runner-test-path-does-not-exist-2',
+    };
+    await scanProjectWithSources(missingPathProject, [spySource]);
+    expect(called).toBe(false);
+  });
+
+  it('records misconfigured (not "failed") when the configured path exists but is a file, not a directory', async () => {
+    const filePath = join(dir, 'not-a-directory.txt');
+    writeFileSync(filePath, 'hello');
+    const fileProject: ProjectConfig = { ...project, id: 'file-path-project', path: filePath };
+    const result = await scanProjectWithSources(fileProject, [source('s1', { findings: [] })]);
+    expect(result.sources.s1.status).toBe('misconfigured');
+    expect(result.sources.s1.error).toContain('not a directory');
+    expect(result.sources.s1.error).toContain(filePath);
+  });
+
+  it('records misconfigured when the configured path exists but is not readable', async () => {
+    // Skipped when running as root: root bypasses directory read permission
+    // bits entirely, so accessSync(R_OK) would succeed and this fixture
+    // would silently exercise the wrong branch instead of proving anything.
+    if (process.getuid && process.getuid() === 0) {
+      return;
+    }
+    const unreadableDir = join(dir, 'unreadable');
+    mkdirSync(unreadableDir);
+    chmodSync(unreadableDir, 0o000);
+    try {
+      const unreadableProject: ProjectConfig = { ...project, id: 'unreadable-path-project', path: unreadableDir };
+      const result = await scanProjectWithSources(unreadableProject, [source('s1', { findings: [] })]);
+      expect(result.sources.s1.status).toBe('misconfigured');
+      expect(result.sources.s1.error).toContain('not readable');
+    } finally {
+      chmodSync(unreadableDir, 0o755);
+    }
   });
 });

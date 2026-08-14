@@ -32,7 +32,7 @@ describe('SourceCard', () => {
   });
 
   it('handles different status values', () => {
-    const statuses: SourceResult['status'][] = ['ok', 'failed', 'unavailable', 'timeout'];
+    const statuses: SourceResult['status'][] = ['ok', 'failed', 'unavailable', 'timeout', 'skipped', 'misconfigured'];
     statuses.forEach((status) => {
       const sample: SourceCardProps = {
         result: {
